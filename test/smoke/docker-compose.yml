@@ -1,0 +1,14 @@
+services:
+  sshd:
+    image: linuxserver/openssh-server:latest
+    ports:
+      - "2222:2222"
+    environment:
+      - USER_NAME=fvmux
+      - USER_PASSWORD=fvmux
+      - PASSWORD_ACCESS=true
+      - SUDO_ACCESS=false
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+    restart: unless-stopped

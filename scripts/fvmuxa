@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# fvmuxa — run fvmux inside a private tmux session so you get
+# detach/reattach without learning tmux.
+#
+# Usage:
+#   fvmuxa                         start or attach
+#   fvmuxa -session=NAME           same, passing flags through to fvmux
+#
+# Detach: F12 d   (tmux's prefix is F12 in this config)
+# Reattach: run fvmuxa again
+# Kill the host: tmux -L fvmux kill-server   (very rare)
+#
+# The tmux server uses a private socket named "fvmux" (-L fvmux), so
+# this does not interact with any other tmux session you may have.
+set -euo pipefail
+
+CONF="${FVMUX_TMUX_CONF:-$HOME/.config/fvmux/fvmux.tmux.conf}"
+if [ ! -f "$CONF" ]; then
+    # Fall back to the config sitting next to this script (handy when
+    # running uninstalled, straight out of the repo).
+    here_conf="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/fvmux.tmux.conf"
+    if [ -f "$here_conf" ]; then
+        CONF="$here_conf"
+    else
+        echo "fvmuxa: tmux config not found." >&2
+        echo "  Looked at: $CONF" >&2
+        echo "             $here_conf" >&2
+        echo "Run 'make install-glue' or set FVMUX_TMUX_CONF." >&2
+        exit 1
+    fi
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "fvmuxa: tmux not found in PATH." >&2
+    exit 1
+fi
+if ! command -v fvmux >/dev/null 2>&1; then
+    echo "fvmuxa: fvmux not found in PATH (run 'make install' first)." >&2
+    exit 1
+fi
+
+exec tmux -L fvmux -f "$CONF" new-session -A -s fvmux -- fvmux "$@"

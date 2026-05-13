@@ -1,0 +1,150 @@
+// Command fvmux is a terminal multiplexer with draggable floating
+// windows, each containing a split tree of panes. Built on the fv-go
+// TUI framework.
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+
+	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
+	"github.com/oldwired/fv-go/pkg/fv/drivers"
+	"github.com/oldwired/fv-go/pkg/fv/geom"
+
+	muxapp "github.com/oldwired/fvmux/internal/app"
+	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/config"
+	"github.com/oldwired/fvmux/internal/menus"
+	"github.com/oldwired/fvmux/internal/profile"
+	"github.com/oldwired/fvmux/internal/session"
+	"github.com/oldwired/fvmux/internal/statusbar"
+)
+
+func main() {
+	f := parseFlags()
+	if f.ShowVersion {
+		fmt.Println("fvmux", Version)
+		return
+	}
+
+	paths := config.Default().WithRoot(f.Config)
+	if err := paths.EnsureDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux: ensuring config dirs:", err)
+		os.Exit(1)
+	}
+	if err := config.SeedDefaults(paths); err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux: warning seeding default configs:", err)
+	}
+
+	cfg, err := config.Load(paths.ConfigFile())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux: warning loading config:", err)
+	}
+	profiles, err := profile.Load(paths.ProfilesFile())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux: warning loading profiles:", err)
+	}
+
+	a, err := fvapp.NewApplication()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux:", err)
+		os.Exit(1)
+	}
+	defer a.Done()
+
+	cols, rows := a.BaseView().Size.X, a.BaseView().Size.Y
+	reg := commands.Defaults()
+	// Rebind chords if the user previously chose a non-default prefix
+	// — Defaults() registers everything under "C-g " so the menu/palette
+	// stay consistent with whichever prefix is configured.
+	if cfg.General.PrefixKey != "" && cfg.General.PrefixKey != "C-g" {
+		reg.RebindPrefix("C-g", cfg.General.PrefixKey)
+	}
+	rebuildMenu := func() {
+		a.SetMenuBar(menus.Build(geom.NewRect(0, 0, cols, 1), reg))
+	}
+
+	bar := statusbar.Build(
+		geom.NewRect(0, rows-1, cols, rows),
+		f.Session,
+		cfg.Appearance.StatusClock,
+	)
+
+	mux := muxapp.NewMux(a, reg, muxapp.Options{
+		Paths:           paths,
+		Config:          cfg,
+		Profiles:        profiles,
+		StatusBar:       bar,
+		SessionName:     f.Session,
+		StartingProfile: f.Profile,
+		Version:         Version,
+		RefreshUI:       rebuildMenu,
+	})
+
+	rebuildMenu()
+	a.SetStatusLine(bar.Line)
+
+	a.OnCommand = func(cmd uint16, ev *drivers.Event) bool {
+		// Internal triggers that carry a payload on InfoPtr need to
+		// see the event directly; the registry's Action(ctx) signature
+		// has no slot for it. Route them here, fall through otherwise.
+		if cmd == commands.CmdAutoClosePane {
+			if pane, ok := ev.InfoPtr.(*session.Pane); ok {
+				mux.AutoClosePane(pane)
+				return true
+			}
+		}
+		return muxapp.Dispatch(reg, &commands.Ctx{App: a}, cmd)
+	}
+	a.OnQuitRequest = func() bool {
+		if !mux.CanQuit() {
+			return false
+		}
+		// Persist session on graceful quit (no-op if no session name).
+		_ = mux.SaveSessionSilent()
+		return true
+	}
+
+	if err := bootstrapInitial(mux, paths, f); err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux:", err)
+		os.Exit(1)
+	}
+
+	mux.InstallPrefixListener()
+	mux.StartTicker()
+	defer mux.StopTicker()
+
+	if !f.NoSplash && cfg.General.SplashEnabled {
+		state, _ := config.LoadState(paths.StateFile())
+		if !state.FirstRunDone {
+			mux.RunFirstRunWizard()
+		}
+	}
+
+	a.Run()
+}
+
+// bootstrapInitial decides between loading a saved session and opening a
+// single starter window. If -session names a saved session, load it;
+// otherwise spawn one window using -profile (or the default).
+func bootstrapInitial(mux *muxapp.Mux, paths config.Paths, f flags) error {
+	if f.Session != "" {
+		snap, err := session.Load(paths.SessionFile(f.Session))
+		switch {
+		case err == nil:
+			if err := mux.LoadSession(snap); err != nil {
+				return fmt.Errorf("loading session %s: %w", f.Session, err)
+			}
+			return nil
+		case errors.Is(err, fs.ErrNotExist):
+			// No saved session yet — fall through and open a fresh window
+			// so the user can populate the workspace, then C-g S to save.
+		default:
+			return fmt.Errorf("loading session %s: %w", f.Session, err)
+		}
+	}
+	_, err := mux.NewWindow(f.Profile)
+	return err
+}

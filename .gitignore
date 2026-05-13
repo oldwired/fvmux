@@ -1,0 +1,12 @@
+.idea/
+.vscode/
+.DS_Store
+
+# Built binaries
+/fvmux
+/cmd/fvmux/fvmux
+
+# Test artefacts
+*.test
+*.out
+coverage.*
