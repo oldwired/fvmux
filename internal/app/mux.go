@@ -524,8 +524,11 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 		pane.Dead = true
 		pane.ExitErr = err
 		if pane.CloseOnExit {
-			// OnExit runs on the PTY-wait goroutine; do the actual
-			// tree mutation on the main loop by posting a command.
+			// fv-go now marshals terminal callbacks onto the UI
+			// goroutine, so calling AutoClosePane directly would be
+			// safe. Routing through CmdAutoClosePane is kept so the
+			// behaviour is observable in the command registry and
+			// the close path is identical to a user-initiated kill.
 			m.App.PostEvent(drivers.Event{
 				What:    consts.EvCommand,
 				Command: commands.CmdAutoClosePane,

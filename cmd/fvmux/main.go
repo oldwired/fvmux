@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"time"
 
@@ -133,6 +134,19 @@ func main() {
 		// Persist session on graceful quit (no-op if no session name).
 		_ = mux.SaveSessionSilent()
 		return true
+	}
+	// Surface fv-go's new diagnostic hooks via slog so the in-app log
+	// viewer (Ctrl-G L) catches backend / queue failures that would
+	// otherwise go unobserved. Defaults are conservative — these only
+	// fire on genuine errors / overflow.
+	a.OnBackendError = func(err error) {
+		slog.Warn("backend error", "err", err)
+	}
+	a.OnEventDropped = func(ev drivers.Event) {
+		slog.Warn("event dropped", "what", ev.What, "command", ev.Command)
+	}
+	a.OnPanic = func(recovered any) {
+		slog.Error("panic in main loop", "recovered", fmt.Sprintf("%v", recovered))
 	}
 
 	if err := bootstrapInitial(mux, paths, f); err != nil {
