@@ -107,7 +107,7 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 		if prof == nil {
 			prof = profile.Defaults()[0]
 		}
-		pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines)
+		pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
 		if err != nil {
 			return nil, err
 		}

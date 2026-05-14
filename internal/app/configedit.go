@@ -87,3 +87,67 @@ func (m *Mux) openConfig()      { m.openConfigFile("config", m.Opts.Paths.Config
 func (m *Mux) openProfiles()    { m.openConfigFile("profiles", m.Opts.Paths.ProfilesFile()) }
 func (m *Mux) openKeybindings() { m.openConfigFile("keybindings", m.Opts.Paths.KeybindingsFile()) }
 func (m *Mux) openHostsEditor() { m.openConfigFile("hosts", m.Opts.Paths.HostsFile()) }
+
+// openConfigFileWithReload is openConfigFile + onSave hook. Used by
+// the theme editor so saving a theme TOML triggers a live re-read +
+// re-apply.
+func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
+	if path == "" {
+		return
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+				"Couldn't create %s:\n%s",
+				[]any{path, err.Error()}, msgbox.OKOnly)
+			return
+		}
+	}
+	desk := m.App.Desktop.BaseView()
+	w := 90
+	h := 26
+	if w > desk.Size.X-2 {
+		w = desk.Size.X - 2
+	}
+	if h > desk.Size.Y-2 {
+		h = desk.Size.Y - 2
+	}
+	x := (desk.Size.X - w) / 2
+	y := (desk.Size.Y - h) / 2
+	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title+" — "+path)
+	editorRect := geom.NewRect(1, 1, w-2, h-3)
+	vbar := views.NewScrollBar(geom.NewRect(w-2, 1, w-1, h-3))
+	d.Insert(vbar)
+	ed := editor.New(editorRect, nil, vbar)
+	if err := ed.LoadFile(path); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Couldn't read %s:\n%s",
+			[]any{path, err.Error()}, msgbox.OKOnly)
+		return
+	}
+	d.Insert(ed)
+	d.Insert(dialogs.NewStaticText(
+		geom.NewRect(2, h-3, w-2, h-2),
+		"Save commits + reloads. Esc discards.",
+	))
+	d.Insert(dialogs.NewButton(
+		geom.NewRect(w/2-12, h-2, w/2-2, h-1),
+		"~S~ave", consts.CmOK, dialogs.BfDefault,
+	))
+	d.Insert(dialogs.NewButton(
+		geom.NewRect(w/2+2, h-2, w/2+12, h-1),
+		"~C~ancel", consts.CmCancel, 0,
+	))
+	if m.App.Desktop.ExecView(d) != consts.CmOK {
+		return
+	}
+	if err := ed.SaveFile(path); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Couldn't write %s:\n%s",
+			[]any{path, err.Error()}, msgbox.OKOnly)
+		return
+	}
+	if onSave != nil {
+		onSave()
+	}
+}

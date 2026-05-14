@@ -32,44 +32,107 @@ func ParsePosition(s string) Position {
 	return PosCenter
 }
 
-// Show opens the palette as a modal picker over the visible commands
-// in reg, blocking until the user picks one or cancels. If the chosen
-// command is enabled, its Action(ctx) fires synchronously. Position
-// controls where the popup lands (see [appearance] palette_position).
+// Options bundles palette inputs that aren't covered by the basic
+// fuzzy-find behaviour. The original Show takes the same arguments
+// it always did; ShowWithOptions exposes MRU + persist callback.
+type Options struct {
+	Pos     Position
+	MRU     []uint16              // recently-used command IDs, newest first.
+	Persist func(newMRU []uint16) // called after a successful pick.
+	Special []SpecialEntry        // optional synthetic entries (`:`, `@`, `#`, `?`).
+}
+
+// SpecialEntry is a top-of-list pseudo-command. Selecting one runs
+// Action(ctx); these don't go through commands.Registry.
+type SpecialEntry struct {
+	Label  string
+	Action func(*commands.Ctx)
+}
+
+// Show is the original convenience entry — MRU disabled. Used by
+// callers that don't have access to state.toml.
 func Show(a *fvapp.Application, reg *commands.Registry, ctx *commands.Ctx, pos Position) {
-	cmds := visibleCommands(reg)
-	if len(cmds) == 0 {
+	ShowWithOptions(a, reg, ctx, Options{Pos: pos})
+}
+
+// ShowWithOptions opens the palette with full control over MRU + the
+// synthetic-entry strip. The user picks; if it's a regular command,
+// reg.ByID dispatches; if it's a synthetic entry, its Action runs.
+func ShowWithOptions(a *fvapp.Application, reg *commands.Registry, ctx *commands.Ctx, opts Options) {
+	cmds := orderCommands(visibleCommands(reg), opts.MRU)
+	if len(cmds) == 0 && len(opts.Special) == 0 {
 		return
 	}
-	items := make([]string, len(cmds))
-	for i, c := range cmds {
-		items[i] = formatRow(c)
+
+	// Build the on-screen items: synthetic entries first, commands after.
+	items := make([]string, 0, len(opts.Special)+len(cmds))
+	for _, s := range opts.Special {
+		items = append(items, s.Label)
+	}
+	for _, c := range cmds {
+		items = append(items, formatRow(c, ctx))
 	}
 
 	desk := a.Desktop.BaseView()
 	cols, rows := desk.Size.X, desk.Size.Y
-	w, h := 64, 14
+	w, h := 70, 16
 	if w > cols-4 {
 		w = cols - 4
 	}
 	if h > rows-2 {
 		h = rows - 2
 	}
-	x, y := placement(pos, cols, rows, w, h)
+	x, y := placement(opts.Pos, cols, rows, w, h)
 	bounds := geom.NewRect(x, y, x+w, y+h)
 
 	ff := fuzzyfinder.New(bounds, items)
 	idx := ff.Run(&a.Desktop.Group)
-	if idx < 0 || idx >= len(cmds) {
+	if idx < 0 {
 		return
 	}
-	c := cmds[idx]
-	if c.Enabled != nil && !c.Enabled(ctx) {
+	if idx < len(opts.Special) {
+		if a := opts.Special[idx].Action; a != nil {
+			a(ctx)
+		}
 		return
 	}
-	if c.Action != nil {
-		c.Action(ctx)
+	cmd := cmds[idx-len(opts.Special)]
+	if cmd.Enabled != nil && !cmd.Enabled(ctx) {
+		return
 	}
+	if cmd.Action != nil {
+		cmd.Action(ctx)
+	}
+	if opts.Persist != nil {
+		opts.Persist(MRUBump(opts.MRU, cmd.ID))
+	}
+}
+
+// orderCommands returns visible commands with MRU entries moved to
+// the front (in MRU order, newest first), followed by the remaining
+// commands in their original order.
+func orderCommands(all []*commands.Command, mru []uint16) []*commands.Command {
+	if len(mru) == 0 {
+		return all
+	}
+	byID := make(map[uint16]*commands.Command, len(all))
+	for _, c := range all {
+		byID[c.ID] = c
+	}
+	out := make([]*commands.Command, 0, len(all))
+	seen := make(map[uint16]bool, len(all))
+	for _, id := range mru {
+		if c, ok := byID[id]; ok && !seen[id] {
+			out = append(out, c)
+			seen[id] = true
+		}
+	}
+	for _, c := range all {
+		if !seen[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // placement returns the top-left corner for a popup of (w, h) on a
@@ -121,9 +184,16 @@ func visibleCommands(reg *commands.Registry) []*commands.Command {
 	return VisibleCommands(reg)
 }
 
-func formatRow(c *commands.Command) string {
+// formatRow renders one command row. Commands whose Enabled predicate
+// vetoes them are tagged "[disabled]" so the user sees they exist but
+// can't pick them right now — picking is then a no-op above.
+func formatRow(c *commands.Command, ctx *commands.Ctx) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%-12s] %-32s", c.Category, c.Name)
+	prefix := "          "
+	if c.Enabled != nil && !c.Enabled(ctx) {
+		prefix = "[disabled]"
+	}
+	fmt.Fprintf(&b, "%s [%-12s] %-32s", prefix, c.Category, c.Name)
 	if c.Chord != "" {
 		b.WriteString("  ")
 		b.WriteString(c.Chord)

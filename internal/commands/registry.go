@@ -24,15 +24,87 @@ func New() *Registry {
 }
 
 // Register adds c to the registry. Panics on duplicate ID — silent
-// overwrites would hide a bug.
+// overwrites would hide a bug. Captures c.Chord into FactoryChord so
+// ResetChords() can restore the baseline on config reload.
 func (r *Registry) Register(c *Command) {
 	if _, dup := r.cmds[c.ID]; dup {
 		panic(fmt.Sprintf("commands.Registry: duplicate ID %d (%q)", c.ID, c.Name))
 	}
+	c.FactoryChord = c.Chord
 	r.cmds[c.ID] = c
 	r.byCategory[c.Category] = append(r.byCategory[c.Category], c)
 	if c.Chord != "" {
 		r.byChord[c.Chord] = c
+	}
+}
+
+// LookupByName returns the (first) command whose Name exactly matches.
+// Used by keybindings.toml override application — the command field in
+// the TOML is the user-facing Name.
+func (r *Registry) LookupByName(name string) *Command {
+	for _, c := range r.cmds {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// ResetChords reverts every command's chord to its FactoryChord and
+// rebuilds the byChord index. Used by Mux.ReloadConfig before
+// re-applying prefix + keybindings.toml overrides, so a previously-
+// overridden binding that the user has now removed reverts cleanly.
+func (r *Registry) ResetChords() {
+	r.byChord = map[string]*Command{}
+	for _, c := range r.cmds {
+		c.Chord = c.FactoryChord
+		if c.Chord != "" {
+			r.byChord[c.Chord] = c
+		}
+	}
+}
+
+// Override is one entry in keybindings.toml — a chord that should be
+// bound to the named command, or removed entirely when Command is "".
+type Override struct {
+	Chord   string
+	Command string // empty ⇒ remove whatever's currently bound to Chord.
+}
+
+// ApplyOverrides walks overrides in order and mutates the registry to
+// match. Empty-string Command removes the binding from whatever
+// command currently owns it. A non-empty Command both unbinds anything
+// currently on the chord AND replaces the named command's chord.
+//
+// Unknown command names are skipped silently — keybindings.toml is
+// user-authored and we don't want to crash on typos. The caller can
+// inspect the registry afterward for diagnostics.
+func (r *Registry) ApplyOverrides(overrides []Override) {
+	for _, o := range overrides {
+		if o.Chord == "" {
+			continue
+		}
+		if o.Command == "" {
+			if c := r.byChord[o.Chord]; c != nil {
+				delete(r.byChord, o.Chord)
+				c.Chord = ""
+			}
+			continue
+		}
+		target := r.LookupByName(o.Command)
+		if target == nil {
+			continue
+		}
+		// Free up the chord if some other command currently holds it.
+		if other := r.byChord[o.Chord]; other != nil && other != target {
+			other.Chord = ""
+		}
+		// Strip target's old binding (if any) from byChord first.
+		if target.Chord != "" {
+			delete(r.byChord, target.Chord)
+		}
+		target.Chord = o.Chord
+		r.byChord[o.Chord] = target
 	}
 }
 

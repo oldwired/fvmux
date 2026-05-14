@@ -66,6 +66,7 @@ const (
 
 	// 1020s — view
 	CmdThemePicker uint16 = 1022 // Ctrl-G T
+	CmdEditThemes  uint16 = 1029 // View → Edit Themes…
 
 	// 1030s — edit / clipboard
 	CmdEnterCopyMode   uint16 = 1030 // Ctrl-G [
@@ -78,11 +79,17 @@ const (
 	CmdSendSIGTERM     uint16 = 1037
 
 	// 1040s — connections
-	CmdConnectHost uint16 = 1040 // Ctrl-G H
-	CmdEditHosts   uint16 = 1041 // Ctrl-G B
+	CmdConnectHost       uint16 = 1040 // Ctrl-G H
+	CmdEditHosts         uint16 = 1041 // Ctrl-G B
+	CmdActiveConnections uint16 = 1042
+	CmdReloadHosts       uint16 = 1043
 
 	// 1050s — transfer
-	CmdSFTPBrowser uint16 = 1050 // Ctrl-G F
+	CmdSFTPBrowser     uint16 = 1050 // Ctrl-G F
+	CmdUploadFile      uint16 = 1051 // Inside SFTP browser only (F6).
+	CmdDownloadFile    uint16 = 1052 // Inside SFTP browser only (F5).
+	CmdActiveTransfers uint16 = 1053
+	CmdClearCompleted  uint16 = 1054
 
 	// 1060s — help / meta
 	CmdCommandPalette uint16 = 1060 // Ctrl-G P
@@ -91,6 +98,27 @@ const (
 	CmdLiteralPrefix  uint16 = 1063 // Hidden: forwards Ctrl-G to focused pane.
 	CmdTickerRedraw   uint16 = 1064 // Hidden: 1s status bar refresh trigger.
 	CmdAutoClosePane  uint16 = 1065 // Hidden: triggered by close-on-exit; InfoPtr = *session.Pane.
+	CmdReloadConfig   uint16 = 1066 // Help → Reload Config.
+	CmdLogViewer      uint16 = 1067 // Ctrl-G L — open log viewer modal.
+
+	// 1068s — session lifecycle + view toggles + misc utility.
+	CmdOpenSession     uint16 = 1068 // Ctrl-G s
+	CmdSaveSessionAs   uint16 = 1069
+	CmdRenameSession   uint16 = 1070 // Ctrl-G $
+	CmdRenamePane      uint16 = 1071
+	CmdToggleClock     uint16 = 1072 // Ctrl-G t
+	CmdToggleStatusBar uint16 = 1073
+	CmdToggleMenuBar   uint16 = 1074
+	CmdRedraw          uint16 = 1075 // Ctrl-G r
+	CmdFlashNumbers    uint16 = 1076 // Ctrl-G q
+	CmdJoinFrom        uint16 = 1077 // Ctrl-G @
+
+	// 1110s — layout-preset menu entries.
+	CmdLayoutEvenH uint16 = 1110
+	CmdLayoutEvenV uint16 = 1111
+	CmdLayoutMainH uint16 = 1112
+	CmdLayoutMainV uint16 = 1113
+	CmdLayoutTiled uint16 = 1114
 
 	// 1090s — window list / find
 	CmdWindowList uint16 = 1090 // Ctrl-G w

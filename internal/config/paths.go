@@ -55,6 +55,7 @@ func (p Paths) EnsureDirs() error {
 	for _, d := range []string{
 		p.Root,
 		filepath.Join(p.Root, "sessions"),
+		filepath.Join(p.Root, "themes"),
 		p.StateRoot,
 		filepath.Join(p.StateRoot, "cm"),
 	} {
@@ -76,3 +77,7 @@ func (p Paths) SessionFile(name string) string {
 func (p Paths) ControlSocket(alias string) string {
 	return filepath.Join(p.StateRoot, "cm", alias+".sock")
 }
+
+// ThemesDir is the directory fvmux scans for user theme TOMLs at
+// startup. Themes follow the schema in internal/theme/load.go.
+func (p Paths) ThemesDir() string { return filepath.Join(p.Root, "themes") }

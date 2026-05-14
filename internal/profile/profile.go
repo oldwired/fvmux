@@ -99,7 +99,10 @@ func Find(profiles []*Profile, name string) *Profile {
 // Instantiate constructs a live session.Pane from p, starting the
 // terminal at the given bounds. defaultScrollback is the global fallback
 // (from [terminal] scrollback_lines) used when p.ScrollbackLines == 0.
-func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int) (*session.Pane, error) {
+// defaultShell is the configured [terminal] shell — used when the
+// profile leaves Command empty (chain: profile → config → $SHELL →
+// /bin/sh).
+func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShell string) (*session.Pane, error) {
 	if p == nil {
 		return nil, errors.New("profile.Instantiate: nil profile")
 	}
@@ -121,6 +124,12 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int) (*session.
 		t.SetEnv(env)
 	}
 	cmd := p.Command
+	if cmd == "" {
+		cmd = defaultShell
+	}
+	if cmd == "" {
+		cmd = os.Getenv("SHELL")
+	}
 	if cmd == "" {
 		cmd = "/bin/sh"
 	}

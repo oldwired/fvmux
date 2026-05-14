@@ -21,8 +21,14 @@ type Client struct {
 
 // Open spawns ssh and negotiates an SFTP session against alias. The
 // alias is resolved by the system ssh client according to ~/.ssh/config.
-func Open(alias string) (*Client, error) {
-	cmd := exec.Command("ssh", "-s", alias, "sftp")
+// When controlPath is non-empty it is passed via `-S` so the session
+// re-uses an existing ControlMaster (skipping re-authentication).
+func Open(alias, controlPath string) (*Client, error) {
+	args := []string{"-s", alias, "sftp"}
+	if controlPath != "" {
+		args = append([]string{"-S", controlPath}, args...)
+	}
+	cmd := exec.Command("ssh", args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ssh stdin: %w", err)

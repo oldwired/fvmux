@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
@@ -16,10 +17,12 @@ import (
 	muxapp "github.com/oldwired/fvmux/internal/app"
 	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/config"
+	"github.com/oldwired/fvmux/internal/logs"
 	"github.com/oldwired/fvmux/internal/menus"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/statusbar"
+	"github.com/oldwired/fvmux/internal/sysmon"
 )
 
 func main() {
@@ -37,6 +40,12 @@ func main() {
 	if err := config.SeedDefaults(paths); err != nil {
 		fmt.Fprintln(os.Stderr, "fvmux: warning seeding default configs:", err)
 	}
+	if err := logs.Init(f.Log, 4096); err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux: warning opening log file:", err)
+	}
+	// Start system-stats sampler before anything that reads from it.
+	sysmon.Start(1 * time.Second)
+	defer sysmon.Stop()
 
 	cfg, err := config.Load(paths.ConfigFile())
 	if err != nil {
@@ -62,8 +71,22 @@ func main() {
 	if cfg.General.PrefixKey != "" && cfg.General.PrefixKey != "C-g" {
 		reg.RebindPrefix("C-g", cfg.General.PrefixKey)
 	}
+	// Apply any user overrides from keybindings.toml. Empty / missing
+	// file is fine; bad entries are skipped silently (Lookups return nil).
+	if overrides, err := config.LoadKeybindings(paths.KeybindingsFile()); err == nil {
+		if len(overrides) > 0 {
+			reg.ApplyOverrides(overrides)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "fvmux: warning loading keybindings:", err)
+	}
+	var mux *muxapp.Mux // captured by the rebuild closure; assigned below.
 	rebuildMenu := func() {
-		a.SetMenuBar(menus.Build(geom.NewRect(0, 0, cols, 1), reg))
+		var extras menus.Extras
+		if mux != nil {
+			extras = mux.BuildMenuExtras()
+		}
+		a.SetMenuBar(menus.BuildWithExtras(geom.NewRect(0, 0, cols, 1), reg, extras))
 	}
 
 	bar := statusbar.Build(
@@ -72,7 +95,7 @@ func main() {
 		cfg.Appearance.StatusClock,
 	)
 
-	mux := muxapp.NewMux(a, reg, muxapp.Options{
+	mux = muxapp.NewMux(a, reg, muxapp.Options{
 		Paths:           paths,
 		Config:          cfg,
 		Profiles:        profiles,
@@ -96,6 +119,11 @@ func main() {
 				return true
 			}
 		}
+		// Dynamic-menu items (themes/profiles/sessions/etc.) are
+		// stored in the Mux's per-rebuild dispatch table.
+		if mux.DispatchDynamic(cmd) {
+			return true
+		}
 		return muxapp.Dispatch(reg, &commands.Ctx{App: a}, cmd)
 	}
 	a.OnQuitRequest = func() bool {
@@ -115,11 +143,14 @@ func main() {
 	mux.InstallPrefixListener()
 	mux.StartTicker()
 	defer mux.StopTicker()
+	defer mux.ShutdownSSHPool()
 
 	if !f.NoSplash && cfg.General.SplashEnabled {
 		state, _ := config.LoadState(paths.StateFile())
 		if !state.FirstRunDone {
 			mux.RunFirstRunWizard()
+		} else {
+			mux.MaybeShowVersionBump()
 		}
 	}
 

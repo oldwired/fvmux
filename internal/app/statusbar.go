@@ -10,6 +10,8 @@ import (
 	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/statusbar"
+	"github.com/oldwired/fvmux/internal/sysmon"
+	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
 // snapshotStatus assembles the live state from the Mux into a
@@ -19,10 +21,17 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 	curView := m.App.Desktop.Current()
 	curWS := m.currentWindow()
 
+	cpu := sysmon.CPUHistory()
+	if m.konamiOn {
+		cpu = flipHistory(cpu)
+	}
 	out := statusbar.Snapshot{
 		SessionName: m.Opts.SessionName,
 		ResizeMode:  m.resizeMode,
 		PrefixArmed: m.prefix != nil && m.prefix.Armed(),
+		HideClock:   m.hideClock,
+		CPUHistory:  cpu,
+		RAMUsage:    sysmon.RAMUsage(),
 	}
 	if curWS != nil {
 		out.SyncInput = curWS.SyncInput
@@ -30,6 +39,11 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 			out.FocusedTitle = curWS.Focus.Pane.Title
 			out.FocusedCWD = curWS.Focus.Pane.CWD
 		}
+	}
+	// Ctrl-G q flash takes over the focused-title slot temporarily.
+	if !m.flashUntil.IsZero() && time.Now().Before(m.flashUntil) {
+		out.FocusedTitle = m.flashText
+		out.FocusedCWD = ""
 	}
 
 	for _, key := range m.windowOrder {
@@ -44,6 +58,7 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 		if title == "" {
 			title = ws.Title
 		}
+		title = whimsy.HomeGlyphFor(title) + title
 		entry := statusbar.WindowEntry{
 			Number:  ws.Number,
 			Title:   title,
@@ -61,6 +76,20 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 			}
 		})
 		out.Windows = append(out.Windows, entry)
+	}
+	return out
+}
+
+// flipHistory mirrors each sample around 0.5 — used by :konami to
+// turn the CPU sparkline upside-down without breaking the renderer's
+// [0,1] expectations.
+func flipHistory(h []float64) []float64 {
+	if len(h) == 0 {
+		return h
+	}
+	out := make([]float64, len(h))
+	for i, v := range h {
+		out[i] = 1 - v
 	}
 	return out
 }

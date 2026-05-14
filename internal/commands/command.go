@@ -16,8 +16,14 @@ type Command struct {
 	Category  string // "Pane", "Window", "Edit", "View", "File", "Connections", "Transfer", "Help"
 	Name      string // "Split Horizontal" — palette-friendly.
 	MenuLabel string // "Split ~H~orizontal" — Borland-style hotkey markers.
-	Chord     string // "C-g %" — empty if unbound.
+	Chord     string // "C-g %" — empty if unbound. Mutated by prefix rebind + user overrides.
 	Hidden    bool   // Omit from menus and palette but keep ID stable.
 	Action    func(ctx *Ctx)
 	Enabled   func(ctx *Ctx) bool // nil ⇒ always enabled.
+
+	// FactoryChord is the chord registered by Defaults() before any
+	// runtime mutation. Used by Registry.ResetChords() so a reload of
+	// keybindings.toml starts from a clean baseline. Set automatically
+	// on Register; do not assign by hand.
+	FactoryChord string
 }

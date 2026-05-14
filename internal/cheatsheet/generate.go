@@ -1,13 +1,17 @@
 // Package cheatsheet auto-generates fvmux's keybinding reference from
 // the live commands.Registry. The same generator feeds the in-app
 // Ctrl-G ? viewer and the build-time-baked assets/cheatsheet.md.
+//
+//go:generate go run ./cmd/genmd
 package cheatsheet
 
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
 // Categories defines the order categories appear in the cheatsheet.
@@ -44,6 +48,15 @@ func Generate(reg *commands.Registry) string {
 	sort.Strings(sortedExtras)
 	for _, cat := range sortedExtras {
 		writeCategory(&b, reg, cat)
+	}
+	if len(whimsy.Taglines) > 0 {
+		// Deterministic-per-day pick so the footer is stable within a
+		// session but rotates across days.
+		idx := int(time.Now().YearDay()) % len(whimsy.Taglines)
+		b.WriteString("---\n\n")
+		b.WriteString("*")
+		b.WriteString(whimsy.Taglines[idx])
+		b.WriteString("*\n")
 	}
 	return b.String()
 }

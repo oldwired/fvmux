@@ -19,6 +19,10 @@ import (
 // as part of a chord. Matches tmux's default 2-second behaviour.
 const armTimeout = 2 * time.Second
 
+// tripleWindow: three prefix presses within this window in a row fire
+// the OnTriplePress callback. Easter egg — splash replay.
+const tripleWindow = 1500 * time.Millisecond
+
 // View is the OfPreProcess listener. Insert one into Desktop's children
 // (NOT as the current child) so it intercepts keyboard events before
 // the focused window receives them.
@@ -30,6 +34,15 @@ type View struct {
 	spec Spec
 
 	armedAt time.Time // zero value ⇒ not armed
+
+	// Last two prefix-press timestamps (newest at [1]). Three presses
+	// within tripleWindow trigger OnTriplePress (splash replay).
+	lastPresses [2]time.Time
+
+	// OnTriplePress, if non-nil, is called on the third prefix press
+	// within tripleWindow. Cleared by the caller (typically a one-shot
+	// installer). Re-entry safe.
+	OnTriplePress func()
 }
 
 // New returns a freshly-constructed prefix view armed on spec.KeyCode.
@@ -77,7 +90,9 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 
 	if v.armedAt.IsZero() {
 		if ev.KeyCode == v.spec.KeyCode {
-			v.armedAt = time.Now()
+			now := time.Now()
+			v.armedAt = now
+			v.recordPress(now)
 			ev.Clear()
 		}
 		return
@@ -102,6 +117,23 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 		c.Action(v.ctx)
 	}
 	ev.Clear()
+}
+
+// recordPress shifts the press-timestamp ring and fires OnTriplePress
+// whenever three consecutive presses fall within tripleWindow.
+func (v *View) recordPress(now time.Time) {
+	prev, prev2 := v.lastPresses[1], v.lastPresses[0]
+	v.lastPresses[0] = prev
+	v.lastPresses[1] = now
+	if v.OnTriplePress == nil {
+		return
+	}
+	if !prev.IsZero() && !prev2.IsZero() &&
+		now.Sub(prev2) <= tripleWindow {
+		// Reset to avoid re-firing on the next single press.
+		v.lastPresses = [2]time.Time{}
+		v.OnTriplePress()
+	}
 }
 
 // chordOf formats the second keystroke as the chord string used in the

@@ -15,6 +15,11 @@ type State struct {
 	LastSession    string    `toml:"last_session"`
 	LastVersion    string    `toml:"last_version"`
 	WelcomeShownAt time.Time `toml:"welcome_shown_at"`
+
+	// PaletteMRU is a short ring of recently-picked command IDs.
+	// The palette pulls these to the top when the query is empty.
+	// Newest first; capped at 10 entries.
+	PaletteMRU []uint16 `toml:"palette_mru"`
 }
 
 // LoadState reads path. Missing file ⇒ zero-value State + nil error.

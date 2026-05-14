@@ -12,14 +12,11 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
-	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
-
 	"github.com/oldwired/fvmux/internal/cheatsheet"
 	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/config"
 	"github.com/oldwired/fvmux/internal/copymode"
 	"github.com/oldwired/fvmux/internal/layout"
-	"github.com/oldwired/fvmux/internal/palette"
 	"github.com/oldwired/fvmux/internal/prefix"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
@@ -28,6 +25,7 @@ import (
 	"github.com/oldwired/fvmux/internal/sshmgr"
 	"github.com/oldwired/fvmux/internal/statusbar"
 	muxtheme "github.com/oldwired/fvmux/internal/theme"
+	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
 // windowState is fvmux's per-window bookkeeping: the fv-go Window, the
@@ -121,7 +119,18 @@ type Mux struct {
 
 	layoutPreset layout.Preset
 
+	hideClock bool // Ctrl-G t suppresses the right-side clock.
+
+	flashUntil time.Time // Ctrl-G q numbers overlay deadline.
+	flashText  string
+
 	tickerStop chan struct{}
+
+	sshPool *sshmgr.Pool
+
+	dynamic *dispatchTable // dynamic menu Cm → action; rebuilt each refresh.
+
+	konamiOn bool // :konami flips the CPU sparkline upside-down.
 }
 
 // NewMux builds a Mux around the given Application, registry, and options.
@@ -133,16 +142,26 @@ func NewMux(a *fvapp.Application, reg *commands.Registry, opts Options) *Mux {
 		opts.Profiles = profile.Defaults()
 	}
 	if len(opts.Themes) == 0 {
-		opts.Themes = muxtheme.Builtins()
+		opts.Themes = muxtheme.All(opts.Paths.ThemesDir())
 	}
 	m := &Mux{
 		App:     a,
 		Reg:     reg,
 		Opts:    opts,
 		windows: map[views.View]*windowState{},
+		sshPool: sshmgr.NewPool(opts.Paths.ControlSocket),
 	}
 	m.wireActions()
 	return m
+}
+
+// ShutdownSSHPool tears down every active ControlMaster process. Called
+// from the cmd/fvmux deferred shutdown so we don't leak orphan ssh
+// children when fvmux exits before ControlPersist expires.
+func (m *Mux) ShutdownSSHPool() {
+	if m.sshPool != nil {
+		m.sshPool.Shutdown()
+	}
 }
 
 func (m *Mux) wireActions() {
@@ -158,8 +177,7 @@ func (m *Mux) wireActions() {
 		m.App.PostEvent(drivers.Event{What: consts.EvCommand, Command: consts.CmQuitApp})
 	})
 	bind(commands.CmdCommandPalette, func() {
-		pos := palette.ParsePosition(m.Opts.Config.Appearance.PalettePosition)
-		palette.Show(m.App, m.Reg, &commands.Ctx{App: m.App}, pos)
+		m.openPalette()
 	})
 	bind(commands.CmdCheatsheet, m.ShowCheatsheet)
 	bind(commands.CmdLiteralPrefix, func() { m.LiteralForward(0x07) })
@@ -179,6 +197,7 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdKillWindow, m.killWindow)
 	bind(commands.CmdSaveSession, m.SaveSession)
 	bind(commands.CmdThemePicker, m.showThemePicker)
+	bind(commands.CmdEditThemes, m.editThemes)
 
 	bind(commands.CmdEnterCopyMode, func() {
 		if t := m.FocusedTerminal(); t != nil {
@@ -200,12 +219,36 @@ func (m *Mux) wireActions() {
 
 	bind(commands.CmdConnectHost, m.connectHost)
 	bind(commands.CmdEditHosts, m.openHostsEditor)
+	bind(commands.CmdActiveConnections, m.showActiveConnections)
+	bind(commands.CmdReloadHosts, m.reloadHosts)
 	bind(commands.CmdSFTPBrowser, m.sftpBrowser)
+	bind(commands.CmdUploadFile, m.transferHintUpload)
+	bind(commands.CmdDownloadFile, m.transferHintDownload)
+	bind(commands.CmdActiveTransfers, m.showActiveTransfers)
+	bind(commands.CmdClearCompleted, m.clearCompletedTransfers)
 	bind(commands.CmdOpenConfig, m.openConfig)
 	bind(commands.CmdOpenProfiles, m.openProfiles)
 	bind(commands.CmdOpenKeybindings, m.openKeybindings)
 	bind(commands.CmdRenameWindow, m.renameWindow)
 	bind(commands.CmdResetFirstRun, m.resetFirstRunWizard)
+	bind(commands.CmdReloadConfig, m.ReloadConfig)
+	bind(commands.CmdLogViewer, m.showLogViewer)
+
+	bind(commands.CmdOpenSession, m.openSessionPicker)
+	bind(commands.CmdSaveSessionAs, m.saveSessionAs)
+	bind(commands.CmdRenameSession, m.renameSessionFile)
+	bind(commands.CmdRenamePane, m.renamePane)
+	bind(commands.CmdToggleClock, m.toggleClock)
+	bind(commands.CmdToggleStatusBar, m.toggleStatusBar)
+	bind(commands.CmdToggleMenuBar, m.toggleMenuBar)
+	bind(commands.CmdRedraw, m.redraw)
+	bind(commands.CmdFlashNumbers, m.flashNumbers)
+	bind(commands.CmdJoinFrom, m.joinFrom)
+	bind(commands.CmdLayoutEvenH, func() { m.applyLayoutPreset(layout.PresetEvenHorizontal) })
+	bind(commands.CmdLayoutEvenV, func() { m.applyLayoutPreset(layout.PresetEvenVertical) })
+	bind(commands.CmdLayoutMainH, func() { m.applyLayoutPreset(layout.PresetMainHorizontal) })
+	bind(commands.CmdLayoutMainV, func() { m.applyLayoutPreset(layout.PresetMainVertical) })
+	bind(commands.CmdLayoutTiled, func() { m.applyLayoutPreset(layout.PresetTiled) })
 
 	bind(commands.CmdLastWindow, m.lastWindow)
 	bind(commands.CmdWindowList, m.showWindowList)
@@ -247,6 +290,14 @@ func (m *Mux) wireActions() {
 // window's tree from its current panes. Focused pane is preserved if
 // still present in the rebuilt tree.
 func (m *Mux) cycleLayout() {
+	next := layout.Preset((int(m.layoutPreset) + 1) % layout.PresetCount)
+	m.applyLayoutPreset(next)
+}
+
+// applyLayoutPreset rebuilds the focused window's tree under p. Shared
+// implementation behind Ctrl-G Space (cycle) and the View → Layout
+// Preset direct-pick menu entries.
+func (m *Mux) applyLayoutPreset(p layout.Preset) {
 	ws := m.currentWindow()
 	if ws == nil || ws.Root == nil {
 		return
@@ -260,12 +311,12 @@ func (m *Mux) cycleLayout() {
 	if len(panes) < 2 {
 		return
 	}
-	m.layoutPreset = layout.Preset((int(m.layoutPreset) + 1) % layout.PresetCount)
+	m.layoutPreset = p
 	focusedID := session.PaneID(0)
 	if ws.Focus != nil && ws.Focus.Pane != nil {
 		focusedID = ws.Focus.Pane.ID
 	}
-	ws.Root = layout.ApplyPreset(m.layoutPreset, panes)
+	ws.Root = layout.ApplyPreset(p, panes)
 	if found := ws.Root.FindByID(focusedID); found != nil {
 		ws.Focus = found
 	} else if leaves := ws.Root.CollectLeaves(); len(leaves) > 0 {
@@ -303,7 +354,11 @@ func (m *Mux) sftpBrowser() {
 	if h == nil {
 		return
 	}
-	sftp.Show(m.App, h.Alias)
+	sock, _ := m.sshPool.Acquire(h.Alias)
+	if sock != "" {
+		defer m.sshPool.Release(h.Alias)
+	}
+	sftp.Show(m.App, h.Alias, sock)
 }
 
 func (m *Mux) connectHost() {
@@ -318,10 +373,18 @@ func (m *Mux) connectHost() {
 	if h == nil {
 		return
 	}
+	// Try to warm a ControlMaster so subsequent connects / SFTP skip
+	// re-auth. If the pool fails (bad alias, ssh missing, etc.) fall
+	// back to a direct `ssh alias` — the connection still happens, it
+	// just re-authenticates next time.
+	args := []string{h.Alias}
+	if sock, err := m.sshPool.Acquire(h.Alias); err == nil && sock != "" {
+		args = []string{"-S", sock, h.Alias}
+	}
 	prof := &profile.Profile{
 		Name:    h.Alias,
 		Command: "ssh",
-		Args:    []string{h.Alias},
+		Args:    args,
 		Title:   h.Alias,
 	}
 	_, err := m.openWindowFromProfile(prof)
@@ -337,7 +400,7 @@ func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error
 	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
 	w := views.NewWindow(bounds, prof.Title, len(m.windowOrder)+1)
 	interior := windowInterior(w)
-	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines)
+	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
 	if err != nil {
 		return nil, err
 	}
@@ -362,16 +425,13 @@ func (m *Mux) showThemePicker() {
 	if len(themes) == 0 {
 		return
 	}
-	items := make([]string, len(themes))
-	for i, t := range themes {
-		items[i] = t.Name + " — " + t.Tagline
-	}
-	origin := m.App.Desktop.BaseView().Origin
-	idx := popupmenu.New(origin, items, 60).Run(&m.App.Desktop.Group)
-	if idx < 0 || idx >= len(themes) {
+	idx := muxtheme.PickLive(m.App, themes, m.Opts.Config.Appearance.Theme)
+	if idx < 0 {
 		return
 	}
 	themes[idx].Apply()
+	m.Opts.Config.Appearance.Theme = themes[idx].Name
+	_ = config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config)
 }
 
 // NewWindow opens a fresh terminal window. If profileName == "" the
@@ -400,7 +460,7 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	w := views.NewWindow(bounds, prof.Name, len(m.windowOrder)+1)
 	interior := windowInterior(w)
 
-	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines)
+	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't start %s:\n%s",
@@ -424,8 +484,21 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	w.Insert(body)
 
 	m.registerWindow(w, ws)
+	m.fridayShipIt()
 	m.refreshStatusBar()
 	return w, nil
+}
+
+// fridayShipIt flashes "ship it" in the status-bar focused-pane slot
+// for 4 s when a new window opens on a Friday after 17:00. Uses the
+// same flashUntil/flashText slot that Ctrl-G q drives for window
+// numbers — they'd only collide if both fire within 4 s.
+func (m *Mux) fridayShipIt() {
+	if !whimsy.FridayAfterFive(time.Now()) {
+		return
+	}
+	m.flashText = "ship it"
+	m.flashUntil = time.Now().Add(4 * time.Second)
 }
 
 func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
@@ -446,7 +519,7 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 	}
 	t.OnCWDChange = func(cwd string) { pane.CWD = cwd }
 	t.OnActivity = func() { pane.Activity = time.Now() }
-	t.OnBell = func() { pane.BellAt = time.Now() }
+	t.OnBell = func() { m.flashOnBell(pane) }
 	t.OnExit = func(err error) {
 		pane.Dead = true
 		pane.ExitErr = err
@@ -526,6 +599,7 @@ func (m *Mux) LiteralForward(b byte) {
 func (m *Mux) InstallPrefixListener() {
 	spec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
 	m.prefix = prefix.New(m.Reg, &commands.Ctx{App: m.App}, spec)
+	m.prefix.OnTriplePress = func() { m.RunFirstRunWizard() }
 	m.App.Desktop.Insert(m.prefix)
 	m.installSyncListener()
 	m.installMouseListener()
@@ -566,10 +640,41 @@ func (m *Mux) ApplyPrefix(newConfigKey string) {
 // (when state.FirstRunDone == false) and on demand via Help → Reset
 // First-Run Wizard.
 func (m *Mux) RunFirstRunWizard() {
-	current := m.Opts.Config.General.PrefixKey
-	result := splash.Run(m.App, current)
+	currentPrefix := m.Opts.Config.General.PrefixKey
+	currentShell := m.Opts.Config.Terminal.Shell
+	pickTheme := func() string {
+		if len(m.Opts.Themes) == 0 {
+			return ""
+		}
+		idx := muxtheme.PickLive(m.App, m.Opts.Themes, m.Opts.Config.Appearance.Theme)
+		if idx < 0 {
+			return ""
+		}
+		return m.Opts.Themes[idx].Name
+	}
+	result := splash.Run(m.App, currentPrefix, currentShell, pickTheme)
+	if result.QuitRequested {
+		// User picked "Quit fvmux" from the welcome dialog. Route
+		// via CmQuitApp so OnQuitRequest fires and graceful save runs.
+		m.App.PostEvent(drivers.Event{What: consts.EvCommand, Command: consts.CmQuitApp})
+		return
+	}
 	if result.PrefixKey != "" {
 		m.ApplyPrefix(result.PrefixKey)
+	}
+	dirty := false
+	if result.Shell != "" && result.Shell != currentShell {
+		m.Opts.Config.Terminal.Shell = result.Shell
+		dirty = true
+	}
+	if result.Theme != "" && result.Theme != m.Opts.Config.Appearance.Theme {
+		m.Opts.Config.Appearance.Theme = result.Theme
+		dirty = true
+		// PickLive already applied the palette live; nothing extra
+		// to do here beyond persisting the choice.
+	}
+	if dirty {
+		_ = config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config)
 	}
 	// Mark first-run as done — persists across restarts. The caller
 	// may already have set this; SaveState is cheap and idempotent.
@@ -616,7 +721,7 @@ func (m *Mux) doSplit(vertical bool) {
 	if prof == nil {
 		prof = profile.Defaults()[0]
 	}
-	newPane, err := profile.Instantiate(prof, geom.NewRect(0, 0, 40, 12), m.Opts.Config.Terminal.ScrollbackLines)
+	newPane, err := profile.Instantiate(prof, geom.NewRect(0, 0, 40, 12), m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't start %s:\n%s",

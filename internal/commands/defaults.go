@@ -98,11 +98,55 @@ func Defaults() *Registry {
 		MenuLabel: "~R~eset First-Run Wizard…",
 	})
 	r.Register(&Command{
+		ID:        CmdReloadConfig,
+		Category:  "Help",
+		Name:      "Reload Config",
+		MenuLabel: "Re~l~oad Config",
+	})
+	r.Register(&Command{
+		ID:        CmdLogViewer,
+		Category:  "Help",
+		Name:      "Log Viewer",
+		MenuLabel: "Lo~g~ Viewer",
+		Chord:     "C-g L",
+	})
+
+	// Session lifecycle extras.
+	r.Register(&Command{ID: CmdOpenSession, Category: "File", Name: "Open Session…", MenuLabel: "~O~pen Session…", Chord: "C-g s"})
+	r.Register(&Command{ID: CmdSaveSessionAs, Category: "File", Name: "Save Session As…", MenuLabel: "Save Session ~A~s…"})
+	r.Register(&Command{ID: CmdRenameSession, Category: "File", Name: "Rename Session…", MenuLabel: "Rename Sess~i~on…", Chord: "C-g $"})
+
+	// Pane rename.
+	r.Register(&Command{ID: CmdRenamePane, Category: "Pane", Name: "Rename Pane…", MenuLabel: "Rename ~P~ane…"})
+
+	// View toggles + redraw + flash numbers.
+	r.Register(&Command{ID: CmdToggleClock, Category: "View", Name: "Toggle Clock", MenuLabel: "Toggle ~C~lock", Chord: "C-g t"})
+	r.Register(&Command{ID: CmdToggleStatusBar, Category: "View", Name: "Toggle Status Bar", MenuLabel: "Toggle ~S~tatus Bar"})
+	r.Register(&Command{ID: CmdToggleMenuBar, Category: "View", Name: "Toggle Menu Bar", MenuLabel: "Toggle ~M~enu Bar"})
+	r.Register(&Command{ID: CmdRedraw, Category: "View", Name: "Redraw", MenuLabel: "~R~edraw", Chord: "C-g r"})
+	r.Register(&Command{ID: CmdFlashNumbers, Category: "View", Name: "Flash Pane Numbers", MenuLabel: "Flash Pane ~N~umbers", Chord: "C-g q"})
+
+	// JoinFrom — opposite of BreakOut.
+	r.Register(&Command{ID: CmdJoinFrom, Category: "Pane", Name: "Join from Window…", MenuLabel: "~J~oin from Window…", Chord: "C-g @"})
+
+	// Layout-preset direct picks.
+	r.Register(&Command{ID: CmdLayoutEvenH, Category: "View", Name: "Layout: Even Horizontal", MenuLabel: "Even ~H~orizontal"})
+	r.Register(&Command{ID: CmdLayoutEvenV, Category: "View", Name: "Layout: Even Vertical", MenuLabel: "Even ~V~ertical"})
+	r.Register(&Command{ID: CmdLayoutMainH, Category: "View", Name: "Layout: Main Horizontal", MenuLabel: "Main H~o~rizontal"})
+	r.Register(&Command{ID: CmdLayoutMainV, Category: "View", Name: "Layout: Main Vertical", MenuLabel: "Main Ve~r~tical"})
+	r.Register(&Command{ID: CmdLayoutTiled, Category: "View", Name: "Layout: Tiled", MenuLabel: "~T~iled"})
+	r.Register(&Command{
 		ID:        CmdThemePicker,
 		Category:  "View",
 		Name:      "Theme…",
 		MenuLabel: "~T~heme…",
 		Chord:     "C-g T",
+	})
+	r.Register(&Command{
+		ID:        CmdEditThemes,
+		Category:  "View",
+		Name:      "Edit Themes…",
+		MenuLabel: "~E~dit Themes…",
 	})
 
 	r.Register(&Command{ID: CmdEnterCopyMode, Category: "Edit", Name: "Enter Copy Mode", MenuLabel: "Enter ~C~opy Mode", Chord: "C-g ["})
@@ -111,8 +155,14 @@ func Defaults() *Registry {
 
 	r.Register(&Command{ID: CmdConnectHost, Category: "Connections", Name: "Connect to Host…", MenuLabel: "~C~onnect to Host…", Chord: "C-g H"})
 	r.Register(&Command{ID: CmdEditHosts, Category: "Connections", Name: "Edit hosts.toml", MenuLabel: "~E~dit hosts.toml", Chord: "C-g B"})
+	r.Register(&Command{ID: CmdActiveConnections, Category: "Connections", Name: "Active Connections…", MenuLabel: "~A~ctive Connections…"})
+	r.Register(&Command{ID: CmdReloadHosts, Category: "Connections", Name: "Reload hosts.toml", MenuLabel: "~R~eload hosts.toml"})
 
 	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "File Browser (SFTP)…", MenuLabel: "~F~ile Browser (SFTP)…", Chord: "C-g F"})
+	r.Register(&Command{ID: CmdUploadFile, Category: "Transfer", Name: "Upload File (inside browser, F6)", MenuLabel: "~U~pload File (in browser, F6)"})
+	r.Register(&Command{ID: CmdDownloadFile, Category: "Transfer", Name: "Download File (inside browser, F5)", MenuLabel: "~D~ownload File (in browser, F5)"})
+	r.Register(&Command{ID: CmdActiveTransfers, Category: "Transfer", Name: "Active Transfers…", MenuLabel: "~A~ctive Transfers…"})
+	r.Register(&Command{ID: CmdClearCompleted, Category: "Transfer", Name: "Clear Completed Transfers", MenuLabel: "~C~lear Completed Transfers"})
 
 	r.Register(&Command{
 		ID:        CmdDetach,

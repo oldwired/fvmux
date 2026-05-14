@@ -43,6 +43,13 @@ type Snapshot struct {
 	SyncInput    bool
 	PrefixArmed  bool
 	ResizeMode   bool
+	HideClock    bool // Ctrl-G t suppresses the right-side clock.
+
+	// CPU + RAM live readings. CPUHistory is up to 10 [0,1] samples
+	// (most recent last); RAMUsage is a single [0,1] fraction. Both
+	// zero / empty when sysmon hasn't yet warmed up.
+	CPUHistory []float64
+	RAMUsage   float64
 }
 
 // Build returns a *Bar holding a freshly-constructed status line.
@@ -116,7 +123,19 @@ func (b *Bar) formatRight(s Snapshot) string {
 		}
 		sb.WriteString("  ")
 	}
-	sb.WriteString(time.Now().Format(b.ClockFormat))
+	if len(s.CPUHistory) > 0 {
+		sb.WriteString("cpu:")
+		sb.WriteString(renderSparkline(s.CPUHistory, 10))
+		sb.WriteByte(' ')
+	}
+	if s.RAMUsage > 0 {
+		sb.WriteString("ram:")
+		sb.WriteString(renderBar(s.RAMUsage, 6))
+		sb.WriteByte(' ')
+	}
+	if !s.HideClock {
+		sb.WriteString(time.Now().Format(b.ClockFormat))
+	}
 	return sb.String()
 }
 

@@ -1,56 +1,45 @@
-// Package copymode implements fvmux's "copy mode" — a read-only
-// scrollback viewer that lets the user navigate, optionally select,
-// and copy terminal history into the clipboard.
+// Package copymode implements fvmux's copy mode: a keyboard-driven
+// selection layer over the focused pane's scrollback.
 //
-// Step 7 ships a simplified version: the focused pane's scrollback is
-// pulled via terminal.ScrollbackText() and shown in a modal markdown
-// view. Selection-based copy uses the host terminal's own
-// click-and-drag (kitty / iTerm2 / etc.), which is what most users do
-// anyway. Sub-step 12 polishes this into a true cell-grid selector.
+// Flow:
+//   - Enter copy mode → terminal cursor parks at the visible region's
+//     bottom-right (fv-go's Terminal.EnterCopyMode does this).
+//   - Arrows / PgUp / PgDn / Home / End move the copy cursor.
+//   - Space toggles a selection anchor.
+//   - Enter copies the selection to the OS clipboard and exits.
+//   - `/` re-enters fv-go's scrollback search.
+//   - Esc exits without copying.
 package copymode
 
 import (
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/consts"
-	"github.com/oldwired/fv-go/pkg/fv/dialogs"
+	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
-	"github.com/oldwired/fv-go/pkg/fv/widgets/markdown"
+	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
 	"github.com/oldwired/fvmux/internal/clipboard"
 )
 
-// Show opens the scrollback viewer modally over a.Desktop, populated
-// with t.ScrollbackText(). Esc / Enter / OK dismiss it; before
-// dismissing, the entire scrollback is also pushed to the system
-// clipboard (so users can paste anywhere immediately).
+// Show enters copy mode on t and installs an OfPreProcess key
+// driver on a.Desktop. The driver consumes navigation + Space + Enter
+// + Esc / `/` and forwards everything else through to the terminal.
+// On Enter the selection (if any) is copied to the OS clipboard; on
+// Esc we exit without copying. Driver self-removes on exit.
 func Show(a *fvapp.Application, t *terminal.Terminal) {
 	if t == nil {
 		return
 	}
-	text := t.ScrollbackText()
-	if text == "" {
-		text = "(scrollback empty)"
+	t.EnterCopyMode()
+	drv := &driver{
+		Base: views.NewBase(geom.NewRect(0, 0, 0, 0)),
+		app:  a,
+		term: t,
 	}
-	_ = clipboard.Set(text)
-
-	desk := a.Desktop.BaseView()
-	w, h := 80, 24
-	if w > desk.Size.X-4 {
-		w = desk.Size.X - 4
-	}
-	if h > desk.Size.Y-4 {
-		h = desk.Size.Y - 4
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
-	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "Copy Mode (Esc to close)")
-	mv := markdown.New(geom.NewRect(2, 2, w-3, h-3), nil)
-	mv.SetMarkdown("```\n" + text + "\n```")
-	d.Insert(mv)
-	d.Insert(dialogs.NewButton(geom.NewRect(w/2-5, h-3, w/2+5, h-2),
-		"O~K~", consts.CmOK, dialogs.BfDefault))
-	a.Desktop.ExecView(d)
+	drv.Options |= consts.OfPreProcess
+	drv.SetSelf(drv)
+	a.Desktop.Insert(drv)
 }
 
 // Paste reads the OS clipboard and writes it to t. When the pane has
@@ -65,4 +54,75 @@ func Paste(t *terminal.Terminal) error {
 		return err
 	}
 	return t.Paste(text)
+}
+
+// driver is the OfPreProcess key listener that powers an active copy
+// mode session. It removes itself from the desktop on exit.
+type driver struct {
+	views.Base
+
+	app  *fvapp.Application
+	term *terminal.Terminal
+	gone bool
+}
+
+// GetTypeID for serial registry.
+func (d *driver) GetTypeID() string { return "copymode-driver" }
+
+// Draw is a no-op — the driver is invisible.
+func (d *driver) Draw() {}
+
+// HandleEvent translates copy-mode key bindings. Non-key events fall
+// through unchanged. Key events that we consume have ev.What cleared.
+func (d *driver) HandleEvent(ev *drivers.Event) {
+	if d.gone || ev.What != consts.EvKeyDown {
+		return
+	}
+	switch ev.KeyCode {
+	case consts.KbLeft:
+		d.term.MoveCopyCursor(-1, 0)
+	case consts.KbRight:
+		d.term.MoveCopyCursor(1, 0)
+	case consts.KbUp:
+		d.term.MoveCopyCursor(0, -1)
+	case consts.KbDown:
+		d.term.MoveCopyCursor(0, 1)
+	case consts.KbPgUp:
+		d.term.MoveCopyCursor(0, -10)
+	case consts.KbPgDn:
+		d.term.MoveCopyCursor(0, 10)
+	case consts.KbHome:
+		d.term.MoveCopyCursor(-1<<14, 0)
+	case consts.KbEnd:
+		d.term.MoveCopyCursor(1<<14, 0)
+	case consts.KbSpaceBar:
+		d.term.ToggleCopyAnchor()
+	case consts.KbEnter:
+		if sel, ok := d.term.CopySelection(); ok && sel != "" {
+			_ = clipboard.Set(sel)
+		}
+		d.exit()
+	case consts.KbEsc:
+		d.exit()
+	default:
+		if ev.UnicodeChar == '/' {
+			d.term.ExitCopyMode()
+			d.gone = true
+			d.app.Desktop.Delete(d)
+			d.term.StartScrollbackSearch()
+		} else {
+			return // pass through.
+		}
+	}
+	ev.Clear()
+	views.MarkDirty()
+}
+
+func (d *driver) exit() {
+	if d.gone {
+		return
+	}
+	d.gone = true
+	d.term.ExitCopyMode()
+	d.app.Desktop.Delete(d)
 }

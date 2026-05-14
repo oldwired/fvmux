@@ -17,6 +17,7 @@ func SeedDefaults(paths Paths) error {
 		{paths.ProfilesFile(), templateProfiles},
 		{paths.HostsFile(), templateHosts},
 		{paths.KeybindingsFile(), templateKeybindings},
+		{filepath.Join(paths.ThemesDir(), "example.toml.disabled"), templateThemeExample},
 	}
 	for _, f := range files {
 		if err := writeIfMissing(f.path, f.body); err != nil {
@@ -25,6 +26,39 @@ func SeedDefaults(paths Paths) error {
 	}
 	return nil
 }
+
+// templateThemeExample is dropped into ~/.config/fvmux/themes/ with a
+// .disabled extension so the loader skips it. Users rename to *.toml
+// to activate. Demonstrates the overlay schema; values are uint16
+// fv-go attributes — high byte = bg, low byte = fg.
+const templateThemeExample = `# fvmux theme overlay (rename to <name>.toml to activate).
+#
+# Every field is optional. Anything you omit inherits from the fv-go
+# default palette. Values are uint16 attributes packed as fg + bg<<8:
+# the easiest way to think about them is "fg colour in the low byte,
+# bg colour in the high byte". TOML accepts hex literals (0x...).
+#
+# 4-bit colour table (terminal-standard):
+#   0  black     8  bright black (gray)
+#   1  blue      9  bright blue
+#   2  green     A  bright green
+#   3  cyan      B  bright cyan
+#   4  red       C  bright red
+#   5  magenta   D  bright magenta
+#   6  yellow    E  bright yellow
+#   7  gray      F  bright white
+
+name = "example"
+tagline = "starter theme — tweak to taste"
+
+[palette]
+frame_normal       = 0x0107   # gray on dark blue
+frame_active       = 0x010D   # bright magenta on dark blue
+window_background  = 0x0107
+splitter_bar       = 0x010B   # bright cyan
+splitter_handle    = 0x010E   # bright yellow
+desktop_background = 0x0008
+`
 
 func writeIfMissing(path, body string) error {
 	if _, err := os.Stat(path); err == nil {
@@ -159,13 +193,23 @@ const templateHosts = `# fvmux additional SSH hosts.
 
 const templateKeybindings = `# fvmux key bindings overrides.
 #
-# Reserved: parsing exists (internal/keys) but application to the
-# registry is not yet hooked up. For now, set the prefix key via
-# [general] prefix_key in config.toml or the first-run wizard.
+# Each [[binding]] entry binds a chord to a command (by its display
+# name, exactly as shown in Ctrl-G ? / the palette). Empty command
+# removes whatever's currently on that chord.
 #
-# Future shape (subject to change):
+# Reload after editing via Help → Reload Config (no restart needed).
+#
+# Examples:
 #
 # [[binding]]
-# chord   = "C-g X"
-# command = "split-h"          # empty removes the default binding.
+# chord   = "C-g g"               # bind Ctrl-G g to "Find Window…"
+# command = "Find Window…"
+#
+# [[binding]]
+# chord   = "C-g w"               # unbind the default Ctrl-G w
+# command = ""
+#
+# [[binding]]
+# chord   = "C-g X"               # custom chord for a built-in
+# command = "Split Horizontal"
 `

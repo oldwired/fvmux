@@ -9,15 +9,23 @@ import (
 // runDialog prompts the user for a one-shot command and spawns it in a
 // new window via `sh -c`. Lets users invoke ad-hoc commands (`nano …`,
 // `htop`, `ssh staging-3`) without defining a profile first.
+//
+// Strings starting with ":" are interpreted as built-in fvmux easter
+// eggs (`:tea`, `:konami`, `:rot13`) instead of shell commands.
 func (m *Mux) runDialog() {
 	text, ok := promptString(m.App, "Run Command",
-		"Command (run via /bin/sh -c):", "")
+		"Command (`:tea`, `:konami`, `:rot13`, or shell):", "")
 	if !ok {
 		return
 	}
 	cmd := strings.TrimSpace(text)
 	if cmd == "" {
 		return
+	}
+	if strings.HasPrefix(cmd, ":") {
+		if m.handleEgg(cmd) {
+			return
+		}
 	}
 	prof := &profile.Profile{
 		Name:    "run",

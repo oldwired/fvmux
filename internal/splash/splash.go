@@ -11,31 +11,56 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
-	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
 
 	"github.com/oldwired/fvmux/internal/prefix"
 )
 
 // Result describes whatever the wizard wants the caller to apply.
-// Empty PrefixKey means "user kept the current prefix" — caller
-// should treat as no-op.
+// Empty PrefixKey / Shell / Theme means "user kept the current value"
+// — caller should treat as no-op for that field. QuitRequested ==
+// true means the user clicked "Quit fvmux" in the welcome dialog;
+// the caller should exit the app.
 type Result struct {
-	PrefixKey string
+	PrefixKey     string
+	Shell         string
+	Theme         string
+	QuitRequested bool
 }
 
-// Run drives the three-step wizard: splash → welcome → prefix picker.
-// currentPrefixKey is the config.toml-style token ("C-g", "C-b", "C-a")
-// shown as the current selection.
+// ThemeChoice is the wizard's hook for surfacing fvmux's themes. The
+// callback opens whatever picker fvmux uses (live preview) and
+// returns the chosen theme name, or "" if the user cancelled / kept
+// the current. The splash package can't import internal/theme
+// directly — that's the host's job.
+type ThemeChoice func() string
+
+// Run drives the wizard: splash → welcome → (optional tour) → prefix
+// picker → shell picker → theme picker. currentPrefixKey /
+// currentShell are the values currently in config.toml, shown as the
+// active selection in each picker (an empty currentShell means
+// "honour $SHELL"). pickTheme, when non-nil, opens the host's live
+// theme picker after the shell step.
 //
 // The caller is responsible for persisting Result and flipping
 // state.FirstRunDone — keeping Run side-effect-free makes the same
 // function usable for both first-launch and Help → Reset First-Run.
-func Run(a *fvapp.Application, currentPrefixKey string) Result {
+func Run(a *fvapp.Application, currentPrefixKey, currentShell string, pickTheme ThemeChoice) Result {
 	showSplash(a)
-	showWelcome(a)
-	picked := pickPrefix(a, currentPrefixKey)
-	return Result{PrefixKey: picked}
+	choice := showWelcome(a)
+	switch choice {
+	case welcomeQuit:
+		return Result{QuitRequested: true}
+	case welcomeTour:
+		RunTour(a)
+	}
+	pickedPrefix := pickPrefix(a, currentPrefixKey)
+	pickedShell := pickShell(a, currentShell)
+	var pickedTheme string
+	if pickTheme != nil {
+		pickedTheme = pickTheme()
+	}
+	return Result{PrefixKey: pickedPrefix, Shell: pickedShell, Theme: pickedTheme}
 }
 
 func showSplash(a *fvapp.Application) {
@@ -65,16 +90,69 @@ func showSplash(a *fvapp.Application) {
 	a.Desktop.ExecView(d)
 }
 
-func showWelcome(a *fvapp.Application) {
-	msgbox.Show(&a.Desktop.Group, msgbox.Info,
-		"Useful chords (assuming Ctrl-G prefix):\n\n"+
-			"  c   new window\n"+
-			"  %   split horizontal\n"+
-			"  P   command palette\n"+
-			"  ?   full cheatsheet\n"+
-			"  ,   rename window\n\n"+
-			"Next: choose your prefix key.",
-		msgbox.OKOnly)
+// welcomeChoice is the user's answer to the 3-button welcome dialog.
+type welcomeChoice int
+
+const (
+	welcomeSkip welcomeChoice = iota // continue to prefix picker without tour.
+	welcomeTour                      // run the 5-step tour.
+	welcomeQuit                      // exit fvmux now.
+)
+
+// Reuse fv-go's reserved Cm codes for the welcome buttons so the
+// Dialog ends modal on click. Mapping (3 buttons + close-box):
+//
+//	Take the tour → CmYes
+//	Skip          → CmOK   (and CmCancel from the [✕] close box)
+//	Quit fvmux    → CmNo
+//
+// Custom Cm codes would leave the dialog open until the close box
+// is hit — Dialog.HandleEvent only EndModals on the four standard
+// values.
+func showWelcome(a *fvapp.Application) welcomeChoice {
+	desk := a.Desktop.BaseView()
+	w, h := 64, 13
+	if w > desk.Size.X-2 {
+		w = desk.Size.X - 2
+	}
+	if h > desk.Size.Y-2 {
+		h = desk.Size.Y - 2
+	}
+	x := (desk.Size.X - w) / 2
+	y := (desk.Size.Y - h) / 2
+	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "Welcome to fvmux")
+	d.Insert(dialogs.NewStaticText(
+		geom.NewRect(2, 2, w-2, h-4),
+		"  Useful chords (assuming Ctrl-G prefix):\n\n"+
+			"    c   new window\n"+
+			"    %   split horizontal\n"+
+			"    P   command palette\n"+
+			"    ?   full cheatsheet\n"+
+			"    ,   rename window\n\n"+
+			"  Take the 5-step tour, skip to the prefix picker,\n"+
+			"  or quit and come back later.",
+	))
+	d.Insert(dialogs.NewButton(
+		geom.NewRect(2, h-3, 18, h-2),
+		"Take the ~t~our", consts.CmYes, dialogs.BfDefault,
+	))
+	d.Insert(dialogs.NewButton(
+		geom.NewRect(20, h-3, 30, h-2),
+		"~S~kip", consts.CmOK, 0,
+	))
+	d.Insert(dialogs.NewButton(
+		geom.NewRect(32, h-3, 50, h-2),
+		"~Q~uit fvmux", consts.CmNo, 0,
+	))
+	switch a.Desktop.ExecView(d) {
+	case consts.CmYes:
+		return welcomeTour
+	case consts.CmNo:
+		return welcomeQuit
+	default:
+		// CmOK (Skip) and CmCancel (close box) both mean skip.
+		return welcomeSkip
+	}
 }
 
 // pickPrefix asks the user to choose one of prefix.Available. Returns
