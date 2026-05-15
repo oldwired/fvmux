@@ -25,6 +25,7 @@ var (
 	cpuLen  int
 	ramPct  float64
 	stopCh  chan struct{}
+	doneCh  chan struct{} // closed by the sampler goroutine on exit
 )
 
 // Start spins up a goroutine that samples CPU + RAM every interval.
@@ -36,6 +37,11 @@ func Start(interval time.Duration) {
 		return
 	}
 	stopCh = make(chan struct{})
+	done := make(chan struct{})
+	doneCh = done
+	// Capture local references; Stop will later nil the package vars
+	// without disrupting the goroutine's view of the close signal.
+	local := stopCh
 	mu.Unlock()
 
 	// Prime cpu.Percent — first call returns zeros, second gives a
@@ -43,26 +49,35 @@ func Start(interval time.Duration) {
 	_, _ = cpu.Percent(0, false)
 
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {
 			case <-t.C:
 				sample()
-			case <-stopCh:
+			case <-local:
 				return
 			}
 		}
 	}()
 }
 
-// Stop ends the sampler goroutine.
+// Stop ends the sampler goroutine and waits for it to exit so the
+// next test or process step doesn't see a lingering sample() call.
 func Stop() {
 	mu.Lock()
-	defer mu.Unlock()
-	if stopCh != nil {
-		close(stopCh)
-		stopCh = nil
+	if stopCh == nil {
+		mu.Unlock()
+		return
+	}
+	close(stopCh)
+	stopCh = nil
+	done := doneCh
+	doneCh = nil
+	mu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 

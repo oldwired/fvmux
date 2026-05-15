@@ -44,6 +44,7 @@ func main() {
 	if err := logs.Init(f.Log, 4096); err != nil {
 		fmt.Fprintln(os.Stderr, "fvmux: warning opening log file:", err)
 	}
+	defer logs.Close()
 	// Start system-stats sampler before anything that reads from it.
 	sysmon.Start(1 * time.Second)
 	defer sysmon.Stop()
@@ -158,6 +159,7 @@ func main() {
 	mux.StartTicker()
 	defer mux.StopTicker()
 	defer mux.ShutdownSSHPool()
+	defer mux.StopEggs()
 
 	if !f.NoSplash && cfg.General.SplashEnabled {
 		state, _ := config.LoadState(paths.StateFile())

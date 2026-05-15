@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // MediaKind classifies a file's contents for preview-pane dispatch.
@@ -70,6 +71,16 @@ func Sniff(name string, buf []byte) MediaKind {
 	if len(check) == 0 {
 		return KindText
 	}
+
+	// Valid UTF-8 with no NUL byte (filtered above) is treated as text
+	// — covers Cyrillic, CJK, Arabic, emoji, accented Latin, etc.
+	// A truncated multi-byte sequence at the buffer boundary makes
+	// utf8.Valid return false, so we still fall through to the
+	// printable-ratio heuristic for legacy encodings.
+	if utf8.Valid(check) {
+		return KindText
+	}
+
 	printable := 0
 	for _, b := range check {
 		if (b >= 0x20 && b < 0x7f) || b == '\n' || b == '\r' || b == '\t' {

@@ -28,17 +28,18 @@ func (m *Mux) handleEgg(cmd string) bool {
 }
 
 // eggTea fires a notification, waits 180s, then fires another. Both
-// auto-dismiss after 6s. Tracking 180s with time.AfterFunc keeps the
-// goroutine cost negligible.
+// auto-dismiss after 6s. The 180s timer is tracked so a quit before it
+// fires can cancel it (avoids touching a torn-down Desktop).
 func (m *Mux) eggTea() {
 	m.notice("Tea timer", "Steeping… 3 minutes.", 6*time.Second)
-	time.AfterFunc(180*time.Second, func() {
+	m.scheduleEgg(180*time.Second, func() {
 		m.notice("Tea ready", "Your tea is ready.", 8*time.Second)
 	})
 }
 
 // eggRot13 swaps the focused pane's terminal output through a rot13
-// filter for 10 seconds. Uses fv-go's Terminal.OnFeed hook.
+// filter for 10 seconds. Uses fv-go's Terminal.OnFeed hook. The
+// restore timer is tracked so shutdown cancels it cleanly.
 func (m *Mux) eggRot13() {
 	t := m.FocusedTerminal()
 	if t == nil {
@@ -47,12 +48,43 @@ func (m *Mux) eggRot13() {
 	prev := t.OnFeed
 	t.OnFeed = func(in []byte) []byte { return whimsy.Rot13(in) }
 	m.notice("rot13", "Output rotated for 10 s.", 4*time.Second)
-	time.AfterFunc(10*time.Second, func() {
-		// Restore the previous hook — typically nil.
-		if t != nil {
-			t.OnFeed = prev
+	m.scheduleEgg(10*time.Second, func() {
+		t.OnFeed = prev
+	})
+}
+
+// scheduleEgg fires fn after d, tracking the timer so StopEggs can
+// cancel everything pending at shutdown. Callers should not hold onto
+// the returned reference.
+func (m *Mux) scheduleEgg(d time.Duration, fn func()) {
+	var t *time.Timer
+	t = time.AfterFunc(d, func() {
+		fn()
+		m.eggMu.Lock()
+		defer m.eggMu.Unlock()
+		for i, x := range m.eggTimers {
+			if x == t {
+				m.eggTimers = append(m.eggTimers[:i], m.eggTimers[i+1:]...)
+				return
+			}
 		}
 	})
+	m.eggMu.Lock()
+	m.eggTimers = append(m.eggTimers, t)
+	m.eggMu.Unlock()
+}
+
+// StopEggs cancels every pending easter-egg timer. Called from the
+// process-exit defer so we don't touch a torn-down Desktop after Run
+// returns.
+func (m *Mux) StopEggs() {
+	m.eggMu.Lock()
+	pending := m.eggTimers
+	m.eggTimers = nil
+	m.eggMu.Unlock()
+	for _, t := range pending {
+		t.Stop()
+	}
 }
 
 // notice is a thin wrapper around widgets/notification.New that lives

@@ -62,7 +62,14 @@ func Show(a *fvapp.Application, alias, controlPath string) {
 
 	remoteCwd, err := c.SFTP().Getwd()
 	if err != nil {
-		remoteCwd = "/"
+		// Getwd failing after a successful Open usually means the SSH
+		// channel died between handshake and the first SFTP request —
+		// surface the error rather than presenting an empty "/" view
+		// that looks like a working session.
+		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
+			"SFTP session lost while opening %s:\n%s",
+			[]any{alias, err.Error()}, msgbox.OKOnly)
+		return
 	}
 	localCwd := defaultLocalRoot()
 
@@ -133,7 +140,13 @@ func Show(a *fvapp.Application, alias, controlPath string) {
 	// Transfer manager + TaskProgress strip.
 	mgr := NewManager()
 	liveMgr = mgr
-	defer func() { liveMgr = nil }()
+	defer func() {
+		// Closing the dialog cancels every in-flight transfer so the
+		// background goroutines wake up and exit cleanly instead of
+		// writing into a Manager nobody is watching.
+		mgr.CancelAll()
+		liveMgr = nil
+	}()
 
 	tp := taskprogress.New(geom.NewRect(2, areaBottom+1, w-2, areaBottom+1+tpRows))
 	d.Insert(tp)

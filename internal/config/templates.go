@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // SeedDefaults writes any missing config file with a commented template.
@@ -69,7 +71,13 @@ func writeIfMissing(path, body string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(body), 0o644)
+	// keybindings.toml can encode prefix-key overrides the user
+	// reasonably considers private; the rest are shareable defaults.
+	perm := os.FileMode(0o644)
+	if filepath.Base(path) == "keybindings.toml" {
+		perm = 0o600
+	}
+	return atomicfile.Write(path, []byte(body), perm)
 }
 
 const templateConfig = `# fvmux configuration.

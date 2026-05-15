@@ -40,7 +40,15 @@ type Transfer struct {
 	status atomic.Int32 // StatusActive/Done/Failed/Cancelled.
 	errMsg atomic.Pointer[string]
 
-	cancel chan struct{}
+	cancel     chan struct{}
+	cancelOnce sync.Once
+}
+
+// requestCancel closes t.cancel exactly once across all callers. Safe
+// to invoke repeatedly (rapid Del presses, lifetime-tied context
+// cancellation, etc.).
+func (t *Transfer) requestCancel() {
+	t.cancelOnce.Do(func() { close(t.cancel) })
 }
 
 // Status values, stored as int32 in Transfer.status.
@@ -110,17 +118,31 @@ func (m *Manager) Start(c *pkgsftp.Client, dir Direction, localPath, remotePath 
 }
 
 // CancelLast aborts the most recent still-active transfer, if any.
-// Used by the browser's Del key. Returns true if something was cancelled.
+// Used by the browser's Del key. Safe to call repeatedly: the per-
+// Transfer sync.Once dedups concurrent cancels. Returns true if a
+// cancel signal was sent.
 func (m *Manager) CancelLast() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := len(m.list) - 1; i >= 0; i-- {
 		if m.list[i].Status() == StatusActive {
-			close(m.list[i].cancel)
+			m.list[i].requestCancel()
 			return true
 		}
 	}
 	return false
+}
+
+// CancelAll requests cancellation of every active transfer. Used when
+// the browser closes mid-flight; idempotent.
+func (m *Manager) CancelAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.list {
+		if t.Status() == StatusActive {
+			t.requestCancel()
+		}
+	}
 }
 
 // ClearCompleted drops Done/Failed/Cancelled entries. Active transfers
@@ -219,6 +241,7 @@ func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 }
 
 var errCancelled = fmt.Errorf("cancelled")
+var errWriteStall = fmt.Errorf("destination write stalled (n=0 with no error)")
 
 func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 	var src io.ReadCloser
@@ -260,10 +283,22 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 		}
 		n, err := src.Read(buf)
 		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
+			wn, werr := dst.Write(buf[:n])
+			if werr != nil {
 				return werr
 			}
-			t.bytes.Add(int64(n))
+			if wn == 0 {
+				// Writer accepted no bytes and reported no error — a
+				// degenerate state we can't progress past. Fail loudly
+				// rather than loop forever.
+				return errWriteStall
+			}
+			t.bytes.Add(int64(wn))
+			if wn < n {
+				// io.Writer contract permits short writes only with
+				// an error; treat this as a defensive guard.
+				return io.ErrShortWrite
+			}
 		}
 		if err == io.EOF {
 			return nil

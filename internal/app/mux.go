@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
@@ -131,6 +132,9 @@ type Mux struct {
 	dynamic *dispatchTable // dynamic menu Cm → action; rebuilt each refresh.
 
 	konamiOn bool // :konami flips the CPU sparkline upside-down.
+
+	eggMu     sync.Mutex
+	eggTimers []*time.Timer // pending easter-egg AfterFunc handles.
 }
 
 // NewMux builds a Mux around the given Application, registry, and options.
@@ -563,10 +567,9 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 			return
 		}
 		if ws.Focus == leaf {
-			if leaves := ws.Root.CollectLeaves(); len(leaves) > 0 {
-				ws.Focus = leaves[0]
-			}
+			ws.Focus = nil // force recoverFocus to pick a fresh leaf
 		}
+		recoverFocus(ws)
 		if ws.Zoomed != nil && ws.Root.FindByID(*ws.Zoomed) == nil {
 			ws.Zoomed = nil
 		}
@@ -752,7 +755,6 @@ func (m *Mux) doClose() {
 		"Close pane and kill its process?") {
 		return
 	}
-	sibling := target.Sibling()
 
 	if target.Pane != nil && target.Pane.Term != nil {
 		target.Pane.Term.Stop()
@@ -764,12 +766,7 @@ func (m *Mux) doClose() {
 		m.removeWindow(ws)
 		return
 	}
-	if sibling != nil {
-		leaves := sibling.CollectLeaves()
-		if len(leaves) > 0 {
-			ws.Focus = leaves[0]
-		}
-	}
+	recoverFocus(ws)
 	if ws.Zoomed != nil && ws.Root.FindByID(*ws.Zoomed) == nil {
 		ws.Zoomed = nil
 	}
@@ -837,13 +834,10 @@ func (m *Mux) doBreakOut() {
 	}
 	newSrcRoot, newWinRoot := layout.BreakOut(ws.Root, ws.Focus)
 	ws.Root = newSrcRoot
-	// Pick a new focus in the source.
-	if newSrcRoot != nil {
-		leaves := newSrcRoot.CollectLeaves()
-		if len(leaves) > 0 {
-			ws.Focus = leaves[0]
-		}
-	}
+	// The moved leaf is no longer in ws.Root; recoverFocus picks the
+	// first surviving leaf (or sets Focus = nil if the source is empty,
+	// which the guard above prevents but rerender tolerates).
+	recoverFocus(ws)
 	if ws.Zoomed != nil && (ws.Root == nil || ws.Root.FindByID(*ws.Zoomed) == nil) {
 		ws.Zoomed = nil
 	}
@@ -1001,6 +995,26 @@ func (m *Mux) cleanupWindow(ws *windowState) {
 		m.lastFocused = nil
 	}
 	m.refreshStatusBar()
+}
+
+// recoverFocus ensures ws.Focus points to a leaf that still lives in
+// ws.Root. Called after Close / BreakOut / AutoClose to fix up focus
+// when the previously focused leaf was removed from the tree.
+func recoverFocus(ws *windowState) {
+	if ws == nil || ws.Root == nil {
+		ws.Focus = nil
+		return
+	}
+	if ws.Focus != nil && ws.Focus.Pane != nil &&
+		ws.Root.FindByID(ws.Focus.Pane.ID) != nil {
+		return
+	}
+	leaves := ws.Root.CollectLeaves()
+	if len(leaves) == 0 {
+		ws.Focus = nil
+		return
+	}
+	ws.Focus = leaves[0]
 }
 
 // rerender rebuilds the fv-go view tree under ws.Frame to match the

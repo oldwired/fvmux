@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // State is the managed runtime state file (state.toml). Holds first-run
@@ -38,11 +40,13 @@ func LoadState(path string) (*State, error) {
 	return st, nil
 }
 
-// SaveState writes s to path.
+// SaveState writes s to path. state.toml holds the user's MRU history
+// and first-run/version markers, so it is written atomically (no
+// partial writes survive a crash) and with 0o600 perms.
 func SaveState(path string, s *State) error {
 	data, err := toml.Marshal(s)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return atomicfile.Write(path, data, 0o600)
 }

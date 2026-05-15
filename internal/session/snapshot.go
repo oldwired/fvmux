@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // Snapshot is the persistent form of one fvmux session, written to
@@ -54,7 +56,9 @@ func Load(path string) (*Snapshot, error) {
 	return &s, nil
 }
 
-// Save writes s to s.MetaPath (must be set by the caller).
+// Save writes s to s.MetaPath (must be set by the caller). Snapshots
+// hold per-user window geometry and titles; written atomically with
+// 0o600 perms so a crash mid-write can't truncate the session file.
 func (s *Snapshot) Save() error {
 	if s.MetaPath == "" {
 		return errors.New("session.Snapshot.Save: MetaPath unset")
@@ -63,5 +67,5 @@ func (s *Snapshot) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.MetaPath, data, 0o644)
+	return atomicfile.Write(s.MetaPath, data, 0o600)
 }

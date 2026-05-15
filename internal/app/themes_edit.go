@@ -9,6 +9,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // editThemes is the View → Edit Themes… entry. Lists every TOML in the
@@ -104,7 +106,7 @@ func (m *Mux) newThemeFlow(dir string) {
 	}
 
 	body := themeSkeleton(name, dir)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := atomicfile.Write(path, []byte(body), 0o644); err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't create %s:\n%s", []any{path, err.Error()}, msgbox.OKOnly)
 		return

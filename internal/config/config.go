@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // Config is the parsed contents of ~/.config/fvmux/config.toml.
@@ -107,11 +109,12 @@ func Load(path string) (*Config, error) {
 
 // Save writes cfg back to path as TOML. Used by the first-run wizard
 // to persist the prefix-key choice; other settings are still
-// hand-edited.
+// hand-edited. Atomic write so a crash never leaves config.toml
+// truncated.
 func Save(path string, cfg *Config) error {
 	data, err := toml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return atomicfile.Write(path, data, 0o644)
 }

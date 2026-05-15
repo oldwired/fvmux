@@ -47,3 +47,35 @@ func TestSniffEmpty(t *testing.T) {
 		t.Errorf("empty buffer should default to KindText; got %v", got)
 	}
 }
+
+func TestSniffUTF8NonASCII(t *testing.T) {
+	cases := []struct {
+		label string
+		buf   []byte
+	}{
+		{"russian", []byte("Привет, мир — это обычный текстовый файл.\n")},
+		{"japanese", []byte("こんにちは、これは普通のテキストファイルです。\n")},
+		{"arabic", []byte("مرحبا بالعالم - هذا ملف نصي عادي.\n")},
+		{"emoji", []byte("Status: 🚀 ✅ all good\n")},
+		{"accented_latin", []byte("Café résumé naïveté\n")},
+	}
+	for _, c := range cases {
+		got := Sniff("unknown.x", c.buf)
+		if got != KindText {
+			t.Errorf("%s: UTF-8 text should be KindText, got %v", c.label, got)
+		}
+	}
+}
+
+func TestSniffTruncatedUTF8DoesNotPanic(t *testing.T) {
+	// Russian "Привет" — 12 bytes, truncate to 11 so the last rune is
+	// incomplete. utf8.Valid returns false; we fall through to the
+	// printable ratio (which classifies as binary since high-bit
+	// bytes aren't "printable"). Important: must not panic.
+	full := []byte("Привет, мир")
+	truncated := full[:len(full)-1]
+	got := Sniff("unknown.x", truncated)
+	// Either classification is acceptable here; the test exists to
+	// guard against panics in the boundary case.
+	_ = got
+}

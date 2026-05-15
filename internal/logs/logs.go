@@ -30,11 +30,12 @@ var (
 	once    sync.Once
 	initErr error
 
-	mu       sync.Mutex
-	ring     []Entry
-	ringHead int
-	ringCap  int
-	sink     io.Writer
+	mu        sync.Mutex
+	ring      []Entry
+	ringHead  int
+	ringCap   int
+	sink      io.Writer
+	sinkClose func() error // nil for ring-only init; closes the file sink.
 )
 
 // Init sets up the ring and (optionally) the file sink. ringSize must
@@ -56,6 +57,7 @@ func Init(path string, ringSize int) error {
 				initErr = err
 			} else {
 				sink = f
+				sinkClose = f.Close
 			}
 		}
 
@@ -64,6 +66,21 @@ func Init(path string, ringSize int) error {
 		slog.Info("fvmux logs initialised", "ring_size", ringSize, "file", path)
 	})
 	return initErr
+}
+
+// Close flushes and closes the file sink (if any). Idempotent and safe
+// to call from a process-exit defer. The ring buffer remains
+// readable after Close so deferred log-dump callers still get data.
+func Close() error {
+	mu.Lock()
+	defer mu.Unlock()
+	if sinkClose == nil {
+		return nil
+	}
+	err := sinkClose()
+	sinkClose = nil
+	sink = nil
+	return err
 }
 
 // Entries returns a copy of the current ring contents in chronological
@@ -88,21 +105,36 @@ func (h *handler) Enabled(_ context.Context, lv slog.Level) bool { return lv >= 
 
 func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	e := Entry{Time: r.Time, Level: r.Level, Msg: r.Message}
-	// Source: first "src" attr, if any, else the package's slog source.
-	r.Attrs(func(a slog.Attr) bool {
+	// Source: first "src" attr (handler-attached or per-record), else
+	// empty. Check the handler's accumulated attrs first so slog.With(
+	// "src", "...") sticks across subsequent calls.
+	for _, a := range h.attrs {
 		if a.Key == "src" {
 			e.Source = a.Value.String()
-			return false
+			break
 		}
-		return true
-	})
+	}
+	if e.Source == "" {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "src" {
+				e.Source = a.Value.String()
+				return false
+			}
+			return true
+		})
+	}
 	appendRing(e)
-	if sink != nil {
-		fmt.Fprintf(sink, "%s [%s] %s %s\n",
+	// Read sink under the same lock that protects sinkClose so a
+	// concurrent Close can't race with an in-flight write.
+	mu.Lock()
+	w := sink
+	mu.Unlock()
+	if w != nil {
+		fmt.Fprintf(w, "%s [%s] %s %s\n",
 			e.Time.Format("2006-01-02T15:04:05.000"),
 			levelString(e.Level),
 			e.Source,
-			formatAttrs(e.Msg, &r),
+			formatAttrs(e.Msg, h.attrs, &r),
 		)
 	}
 	return nil
@@ -138,8 +170,11 @@ func levelString(lv slog.Level) string {
 	}
 }
 
-func formatAttrs(msg string, r *slog.Record) string {
+func formatAttrs(msg string, handlerAttrs []slog.Attr, r *slog.Record) string {
 	var s = msg
+	for _, a := range handlerAttrs {
+		s += " " + a.Key + "=" + a.Value.String()
+	}
 	r.Attrs(func(a slog.Attr) bool {
 		s += " " + a.Key + "=" + a.Value.String()
 		return true
