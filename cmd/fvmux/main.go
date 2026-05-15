@@ -44,7 +44,7 @@ func main() {
 	if err := logs.Init(f.Log, 4096); err != nil {
 		fmt.Fprintln(os.Stderr, "fvmux: warning opening log file:", err)
 	}
-	defer logs.Close()
+	defer func() { _ = logs.Close() }()
 	// Start system-stats sampler before anything that reads from it.
 	sysmon.Start(1 * time.Second)
 	defer sysmon.Stop()

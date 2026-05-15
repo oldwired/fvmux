@@ -27,12 +27,12 @@ func Write(path string, data []byte, perm os.FileMode) error {
 	}
 
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		_ = os.Remove(tmp)
 		return err
 	}

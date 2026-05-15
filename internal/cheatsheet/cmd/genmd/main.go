@@ -22,5 +22,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, "genmd:", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stdout, "wrote %s (%d bytes)\n", out, len(body))
+	_, _ = fmt.Fprintf(os.Stdout, "wrote %s (%d bytes)\n", out, len(body))
 }

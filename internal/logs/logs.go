@@ -130,7 +130,7 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	w := sink
 	mu.Unlock()
 	if w != nil {
-		fmt.Fprintf(w, "%s [%s] %s %s\n",
+		_, _ = fmt.Fprintf(w, "%s [%s] %s %s\n",
 			e.Time.Format("2006-01-02T15:04:05.000"),
 			levelString(e.Level),
 			e.Source,

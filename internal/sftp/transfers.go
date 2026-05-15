@@ -243,7 +243,7 @@ func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 var errCancelled = fmt.Errorf("cancelled")
 var errWriteStall = fmt.Errorf("destination write stalled (n=0 with no error)")
 
-func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
+func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) (retErr error) {
 	var src io.ReadCloser
 	var dst io.WriteCloser
 
@@ -255,7 +255,7 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 		}
 		rf, err := c.Create(t.RemotePath)
 		if err != nil {
-			lf.Close()
+			_ = lf.Close()
 			return err
 		}
 		src, dst = lf, rf
@@ -266,13 +266,20 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 		}
 		lf, err := os.Create(t.LocalPath)
 		if err != nil {
-			rf.Close()
+			_ = rf.Close()
 			return err
 		}
 		src, dst = rf, lf
 	}
-	defer src.Close()
-	defer dst.Close()
+	defer func() { _ = src.Close() }()
+	// dst.Close may flush buffered writes (notably on SFTP uploads); a
+	// silent Close error here would mean the transfer reported success
+	// while data was lost. Promote it to retErr if nothing else failed.
+	defer func() {
+		if cerr := dst.Close(); cerr != nil && retErr == nil {
+			retErr = cerr
+		}
+	}()
 
 	buf := make([]byte, 64*1024)
 	for {

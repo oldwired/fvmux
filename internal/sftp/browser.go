@@ -58,7 +58,7 @@ func Show(a *fvapp.Application, alias, controlPath string) {
 			[]any{alias, err.Error()}, msgbox.OKOnly)
 		return
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	remoteCwd, err := c.SFTP().Getwd()
 	if err != nil {
