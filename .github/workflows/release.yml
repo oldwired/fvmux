@@ -24,11 +24,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Strip local replace
-        run: |
-          sed -i '/^replace github.com\/oldwired\/fv-go /d' go.mod
-          go mod tidy
-
       - name: Build
         env:
           GOOS: ${{ matrix.os }}

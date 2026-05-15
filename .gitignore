@@ -2,6 +2,11 @@
 .vscode/
 .DS_Store
 
+# Go workspaces (local-only dual-repo dev with ../fv-go).
+# go.mod pins a real fv-go version; go.work overrides it locally.
+go.work
+go.work.sum
+
 # Built binaries
 /fvmux
 /cmd/fvmux/fvmux

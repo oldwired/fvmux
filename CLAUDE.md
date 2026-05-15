@@ -16,13 +16,18 @@ Target module path: `github.com/oldwired/fvmux`. v1 scope = multiplexer core + S
 
 fvmux is a *consumer* of `github.com/oldwired/fv-go` (located at `/Users/apfau/GolandProjects/fv-go/`, module `github.com/oldwired/fv-go`). The dependency is one-way: fvmux imports `pkg/fv/...` and treats it as a stable API. Used surface includes `app.Application`/`Desktop`, `views.{Window, SplitGroup, Group, View, Base}`, the `widgets/*` family (terminal, fuzzyfinder, popupmenu, treeview, markdown, taskprogress, hexedit, imageview, cpucore, ramview, notification), `menus.{MenuBar, StatusLine}`, `dialogs.*`, `consts.OfPreProcess`, `geom.Rect`, `drivers.Event`, and `sixel`.
 
-During dual-repo development, `fvmux/go.mod` must carry a local `replace` directive:
+Dual-repo development uses a **Go workspace**, not a `replace` directive. `go.mod` pins a real fv-go pseudo-version (so CI and releases fetch it like any other module); a gitignored `go.work` at the repo root sits a `use ../fv-go` on top of that pin, so local builds see the working tree:
 
 ```
-replace github.com/oldwired/fv-go => ../fv-go
+go 1.25.0
+
+use (
+	.
+	../fv-go
+)
 ```
 
-CI guard strips this before tagging fvmux releases.
+When fv-go changes land and need to flow into fvmux: commit + push fv-go, then `go get github.com/oldwired/fv-go@main` here to bump the pseudo-version in `go.mod`. The `go.work` keeps the local edits visible in the meantime. CI never sees `go.work`, so it builds against whatever's pinned in `go.mod`.
 
 **When you hit a gap or bug in fv-go: stop and call it out.** Do not patch fv-go from inside this session, and do not work around it in fvmux. Surface the missing API or broken behaviour to the user in plain terms — what you needed, where, and why fvmux can't proceed without it — then wait. The fix lands in a separate fv-go session immediately afterward; you resume here against the updated tree. This is the same discipline as Stage 0: every fv-go change is its own small, reviewable PR rather than a drive-by edit smuggled inside an fvmux feature. Divergence between the two repos is the failure mode to avoid.
 

@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/kevinburke/ssh_config v1.6.0
-	github.com/oldwired/fv-go v0.0.0-00010101000000-000000000000
+	github.com/oldwired/fv-go v0.0.0-20260514230451-5db9dfd07d30
 	github.com/pkg/sftp v1.13.10
 	github.com/shirou/gopsutil/v4 v4.26.4
 )
@@ -26,5 +26,3 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 )
-
-replace github.com/oldwired/fv-go => ../fv-go
