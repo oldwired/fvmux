@@ -39,7 +39,7 @@ func BuildPreview(s *pkgsftp.Client, path string, bounds geom.Rect) views.View {
 	if err != nil {
 		return errorPreview(bounds, err.Error())
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, maxPreviewBytes)
 	n, _ := io.ReadFull(f, buf)
@@ -72,7 +72,7 @@ func decodeImage(s *pkgsftp.Client, path string, bounds geom.Rect) views.View {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
 	if err != nil {
 		return nil
@@ -102,7 +102,7 @@ func BuildLocalPreview(path string, bounds geom.Rect) views.View {
 	if err != nil {
 		return errorPreview(bounds, err.Error())
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, maxPreviewBytes)
 	n, _ := io.ReadFull(f, buf)
@@ -132,7 +132,7 @@ func decodeLocalImage(path string, bounds geom.Rect) views.View {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
 	if err != nil {
 		return nil

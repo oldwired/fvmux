@@ -93,7 +93,7 @@ func enumerateShells() []string {
 			"/opt/homebrew/bin/fish", "/opt/homebrew/bin/zsh",
 		})
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out []string
 	seen := map[string]bool{}

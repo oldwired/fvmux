@@ -87,7 +87,7 @@ func loadSSHConfig(path string) ([]*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	cfg, err := ssh_config.Decode(f)
 	if err != nil {
