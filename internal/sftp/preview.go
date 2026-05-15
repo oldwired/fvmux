@@ -7,6 +7,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
@@ -91,4 +92,52 @@ func errorPreview(bounds geom.Rect, msg string) views.View {
 	mv := markdown.New(bounds, nil)
 	mv.SetMarkdown(fmt.Sprintf("# Error\n\n%s", msg))
 	return mv
+}
+
+// BuildLocalPreview is the local-FS counterpart to BuildPreview. Reads
+// from os.Open instead of the SFTP client; same classification rules
+// and fallback chain.
+func BuildLocalPreview(path string, bounds geom.Rect) views.View {
+	f, err := os.Open(path)
+	if err != nil {
+		return errorPreview(bounds, err.Error())
+	}
+	defer f.Close()
+
+	buf := make([]byte, maxPreviewBytes)
+	n, _ := io.ReadFull(f, buf)
+	buf = buf[:n]
+
+	switch Sniff(path, buf) {
+	case KindImage:
+		if iv := decodeLocalImage(path, bounds); iv != nil {
+			return iv
+		}
+		return hexPreview(buf, bounds)
+	case KindBinary:
+		return hexPreview(buf, bounds)
+	case KindMarkdown:
+		mv := markdown.New(bounds, nil)
+		mv.SetMarkdown(string(buf))
+		return mv
+	default: // KindText
+		mv := markdown.New(bounds, nil)
+		mv.SetMarkdown("```\n" + strings.TrimRight(string(buf), "\n") + "\n```")
+		return mv
+	}
+}
+
+func decodeLocalImage(path string, bounds geom.Rect) views.View {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
+	if err != nil {
+		return nil
+	}
+	iv := imageview.New(bounds)
+	iv.SetImage(img)
+	return iv
 }
