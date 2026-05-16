@@ -130,9 +130,14 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	}
 	x := (desk.Size.X - w) / 2
 	y := (desk.Size.Y - h) / 2
-	d := dialogs.NewDialog(
+	// Min 80×18 — tight but everything still draws: ~16-col tree,
+	// ~22-col listing, ~20-col preview, plus the transfer strip and
+	// button row. fv-go's resizeLoop reads Self().SizeLimits() to
+	// keep mouse-drag from shrinking past this.
+	d := newResizableDialog(
 		geom.NewRect(x, y, x+w, y+h),
 		fmt.Sprintf("SFTP — %s", alias),
+		80, 18,
 	)
 
 	// Column widths inside the dialog (inner = w-2 usable).
@@ -177,22 +182,35 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	d.Insert(remoteHeader)
 	d.Insert(localHeader)
 
-	// Remote panel (upper-left).
-	remote := newPanel(d, true, c.SFTP(), remoteCwd, remoteHeader, listX1-treeX0,
+	// newPanel / newPreviewPane want the underlying *dialogs.Dialog
+	// for Insert/Delete — resizableDialog is a wrapper around it.
+	innerD := d.Dialog
+
+	// Remote panel (upper-left). Fixed: stays at the top of the
+	// dialog at constant width/height — extra Y goes to the local
+	// panel and TaskProgress strip, extra X goes to the preview.
+	remote := newPanel(innerD, true, c.SFTP(), remoteCwd, remoteHeader, listX1-treeX0,
 		geom.NewRect(treeX0, 2, treeX1, midY),
 		geom.NewRect(listX0, 2, listX1, midY),
 	)
-	// Local panel (lower-left).
-	local := newPanel(d, false, nil, localCwd, localHeader, listX1-treeX0,
+	// Local panel (lower-left). The tree + listing grow vertically
+	// so extra Y is consumed by the local side. The local header
+	// sits at midY and stays put (fixed Y).
+	local := newPanel(innerD, false, nil, localCwd, localHeader, listX1-treeX0,
 		geom.NewRect(treeX0, midY+1, treeX1, areaBottom),
 		geom.NewRect(listX0, midY+1, listX1, areaBottom),
 	)
+	local.tree.GrowMode = consts.GfGrowHiY
+	local.listing.GrowMode = consts.GfGrowHiY
 	// Initial header renders include cwd width-aware truncation.
 	remote.refreshHeader()
 	local.refreshHeader()
 
 	// Preview spans the right column, full height of the panel area.
-	pp := newPreviewPane(d, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
+	// Extra X and extra Y both flow into the preview.
+	pp := newPreviewPane(innerD, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
+	pp.growMode = consts.GfGrowHiX | consts.GfGrowHiY
+	pp.applyGrowMode()
 	remote.preview = pp
 	local.preview = pp
 
@@ -202,7 +220,11 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	mgr := NewManager()
 	addLiveMgr(mgr)
 
+	// TaskProgress strip: stays anchored to its row band but slides
+	// down with the dialog (so the local panel can grow into the
+	// freed Y), and stretches with width.
 	tp := taskprogress.New(geom.NewRect(2, tpY0, w-2, tpY1))
+	tp.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY | consts.GfGrowHiX
 	d.Insert(tp)
 	tt := &transferTicker{m: mgr, tp: tp, ok: true}
 	anim.Register(tt, 200*time.Millisecond)
@@ -211,7 +233,7 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	// (Esc / Close button) routed to d.Close since non-modal dialogs
 	// no-op on EndModal.
 	keys := newKeyHandler(a, mgr, remote, local)
-	keys.dlg = d
+	keys.dlg = innerD
 	d.Insert(keys)
 
 	// Bottom row: navigation hints (Tab / Enter / Esc are behaviors,
@@ -231,19 +253,31 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 		geom.NewRect(2, h-3, hintX1, h-2),
 		"Tab switch  ·  Enter open  ·  Esc close",
 	)
+	// Hint sticks to the bottom row (Y slides with parent) but
+	// stays anchored at the left edge (no X grow).
+	hint.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY
 	d.Insert(hint)
-	d.Insert(dialogs.NewButton(
+
+	copyBtn := dialogs.NewButton(
 		geom.NewRect(copyX0, h-3, copyX1, h-2),
 		"~C~opy", cmSftpCopy, 0,
-	))
-	d.Insert(dialogs.NewButton(
+	)
+	copyBtn.GrowMode = consts.GfGrowAll
+	d.Insert(copyBtn)
+
+	cancelBtn := dialogs.NewButton(
 		geom.NewRect(cancelX0, h-3, cancelX1, h-2),
 		"C~a~ncel xfer", cmSftpCancel, 0,
-	))
-	d.Insert(dialogs.NewButton(
+	)
+	cancelBtn.GrowMode = consts.GfGrowAll
+	d.Insert(cancelBtn)
+
+	closeBtn := dialogs.NewButton(
 		geom.NewRect(closeX0, h-3, closeX1, h-2),
 		"Cl~o~se", consts.CmCancel, dialogs.BfDefault,
-	))
+	)
+	closeBtn.GrowMode = consts.GfGrowAll
+	d.Insert(closeBtn)
 
 	// Single teardown for every close path — [✕] click, Esc, Close
 	// button, or programmatic d.Close(). Window.OnClose fires before
@@ -274,10 +308,11 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 // browser. show(path) tears down the previous widget and inserts a
 // fresh one built from BuildPreview.
 type previewPane struct {
-	d       *dialogs.Dialog
-	c       *pkgsftp.Client
-	bounds  geom.Rect
-	current views.View
+	d        *dialogs.Dialog
+	c        *pkgsftp.Client
+	bounds   geom.Rect
+	current  views.View
+	growMode byte
 }
 
 func newPreviewPane(d *dialogs.Dialog, c *pkgsftp.Client, bounds geom.Rect) *previewPane {
@@ -293,7 +328,26 @@ func newPreviewPane(d *dialogs.Dialog, c *pkgsftp.Client, bounds geom.Rect) *pre
 	return &previewPane{d: d, c: c, bounds: bounds, current: mv}
 }
 
+// applyGrowMode pushes the configured GrowMode onto the current
+// widget. Called after the initial set-up so a later swap re-applies
+// the same flags; also re-applied inside swap() for each new widget.
+func (p *previewPane) applyGrowMode() {
+	if p.current != nil {
+		p.current.BaseView().GrowMode = p.growMode
+	}
+}
+
+// refreshBounds re-derives p.bounds from the current widget's actual
+// rect — important after a dialog resize, since the next widget we
+// build must use the new size, not the construction-time size.
+func (p *previewPane) refreshBounds() {
+	if p.current != nil {
+		p.bounds = p.current.BaseView().GetBounds()
+	}
+}
+
 func (p *previewPane) show(path string) {
+	p.refreshBounds()
 	next := BuildPreview(p.c, path, p.bounds)
 	p.swap(next)
 }
@@ -301,6 +355,7 @@ func (p *previewPane) show(path string) {
 // showLocal is show() for local-FS paths — reads via os.Open instead
 // of the SFTP client.
 func (p *previewPane) showLocal(path string) {
+	p.refreshBounds()
 	next := BuildLocalPreview(path, p.bounds)
 	p.swap(next)
 }
@@ -313,6 +368,7 @@ func (p *previewPane) swap(next views.View) {
 		p.d.Delete(p.current)
 	}
 	p.current = next
+	p.current.BaseView().GrowMode = p.growMode
 	p.d.Insert(p.current)
 	views.MarkDirty()
 }
