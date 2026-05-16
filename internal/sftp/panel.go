@@ -67,9 +67,10 @@ func newPanel(
 	// Tree drives listing: highlighting a folder in the tree sets
 	// that side's cwd and rebuilds the listing.
 	p.tree.OnSelect = func(n *treeview.Node) { p.onTreeSelect(n) }
-	// Listing drives preview: highlighting a file fires preview;
-	// folder / parent rows are handled by Enter through listingEnter.
-	p.listing.OnSelect = func(n *treeview.Node) { p.onListingSelect(n) }
+	// Listing OnSelect is intentionally NOT wired to preview. Auto-
+	// previewing on arrow-nav would re-fetch every remote file the
+	// cursor crosses — bad UX on a slow link. Enter on a file row
+	// is the explicit "open it" action; see listingEnter below.
 
 	d.Insert(p.tree)
 	d.Insert(p.listing)
@@ -106,26 +107,10 @@ func (p *panel) onTreeSelect(n *treeview.Node) {
 	p.setCwd(e.Path)
 }
 
-// onListingSelect: file → preview; folder / parent → no-op (Enter
-// handles those via listingEnter).
-func (p *panel) onListingSelect(n *treeview.Node) {
-	if n == nil || p.preview == nil {
-		return
-	}
-	e, ok := n.Data.(*fileEntry)
-	if !ok || e.IsDir {
-		return
-	}
-	if e.Local {
-		p.preview.showLocal(e.Path)
-	} else {
-		p.preview.show(e.Path)
-	}
-}
-
-// listingEnter is Enter / double-click inside the listing. Folder /
-// parent rows update cwd; file rows are no-ops (the preview is
-// already current from OnSelect).
+// listingEnter is Enter / double-click on a listing row. Folder /
+// parent rows cd; file rows fire the preview (this is the explicit
+// "open" gesture — auto-preview on highlight was dropped to avoid
+// re-fetching remote files on every arrow press).
 func (p *panel) listingEnter() {
 	if p.listing == nil {
 		return
@@ -140,6 +125,15 @@ func (p *panel) listingEnter() {
 	}
 	if e.IsDir {
 		p.setCwd(e.Path)
+		return
+	}
+	if p.preview == nil {
+		return
+	}
+	if e.Local {
+		p.preview.showLocal(e.Path)
+	} else {
+		p.preview.show(e.Path)
 	}
 }
 

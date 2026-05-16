@@ -1,34 +1,55 @@
 package sftp
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 
 	pkgsftp "github.com/pkg/sftp"
+
+	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
+// ErrAuthRequired is returned by Open when ssh refused because
+// BatchMode=yes is set and auth would need interaction (no master,
+// agent doesn't have the key, password auth, etc.). Callers can
+// detect this via errors.Is and offer to spawn an interactive ssh
+// session that warms the ControlMaster.
+var ErrAuthRequired = errors.New("ssh authentication needs interaction")
+
 // Client wraps a pkg/sftp.Client whose underlying transport is a
-// long-running `ssh -s <alias> sftp` subprocess. Delegating to the
+// long-running `ssh ... -s alias sftp` subprocess. Delegating to the
 // system ssh keeps known_hosts verification, ssh-agent, and ProxyCommand
 // behaving exactly as the user expects from their other ssh-based tools.
 type Client struct {
-	cmd  *exec.Cmd
-	sftp *pkgsftp.Client
-	in   io.WriteCloser
-	out  io.ReadCloser
+	cmd    *exec.Cmd
+	sftp   *pkgsftp.Client
+	in     io.WriteCloser
+	out    io.ReadCloser
+	stderr *bytes.Buffer
 }
 
-// Open spawns ssh and negotiates an SFTP session against alias. The
-// alias is resolved by the system ssh client according to ~/.ssh/config.
-// When controlPath is non-empty it is passed via `-S` so the session
-// re-uses an existing ControlMaster (skipping re-authentication).
+// Open spawns ssh and negotiates an SFTP session against alias.
+// controlPath, when non-empty, threads ControlMaster=auto +
+// ControlPath=<sock> so the session reuses a master if one is up.
+//
+// The ssh subprocess runs without a controlling TTY (this is a pipe-
+// based subsystem call, not an interactive shell), so we force
+// BatchMode=yes — preventing ssh from trying to write a password
+// prompt to /dev/tty and corrupting fvmux's display. If auth would
+// require interaction, ssh fails immediately and the surfaced error
+// tells the user to authenticate via Ctrl-G H first (that path runs
+// inside a real PTY pane where prompts are renderable).
 func Open(alias, controlPath string) (*Client, error) {
-	args := []string{"-s", alias, "sftp"}
-	if controlPath != "" {
-		args = append([]string{"-S", controlPath}, args...)
-	}
+	args := []string{}
+	args = append(args, sshmgr.ControlOpts(controlPath)...)
+	args = append(args, "-o", "BatchMode=yes")
+	args = append(args, "-s", alias, "sftp")
 	cmd := exec.Command("ssh", args...)
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ssh stdin: %w", err)
@@ -37,6 +58,11 @@ func Open(alias, controlPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssh stdout: %w", err)
 	}
+	// Capture stderr so an early auth failure surfaces in the dialog
+	// instead of going to fvmux's outer terminal.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("ssh start: %w", err)
 	}
@@ -44,9 +70,31 @@ func Open(alias, controlPath string) (*Client, error) {
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("sftp negotiate: %w", err)
+		return nil, classifyOpenError(alias, err, stderr.String())
 	}
-	return &Client{cmd: cmd, sftp: sc, in: stdin, out: stdout}, nil
+	return &Client{cmd: cmd, sftp: sc, in: stdin, out: stdout, stderr: &stderr}, nil
+}
+
+// classifyOpenError turns ssh's stderr blob into a friendlier error
+// when the failure is "auth needed but BatchMode is on" — the
+// common case for a first-time SFTP to an alias whose ControlMaster
+// isn't warm yet. Auth-required errors wrap ErrAuthRequired so the
+// caller can detect them via errors.Is and offer to spawn an
+// interactive ssh pane to warm the master.
+func classifyOpenError(alias string, err error, stderr string) error {
+	s := strings.ToLower(stderr)
+	switch {
+	case strings.Contains(s, "permission denied"),
+		strings.Contains(s, "password"),
+		strings.Contains(s, "publickey"),
+		strings.Contains(s, "host key verification failed"):
+		return fmt.Errorf("%w: ssh refused for %s: %s",
+			ErrAuthRequired, alias, strings.TrimSpace(stderr))
+	}
+	if strings.TrimSpace(stderr) == "" {
+		return fmt.Errorf("sftp negotiate: %w", err)
+	}
+	return fmt.Errorf("sftp negotiate: %w\nssh stderr: %s", err, strings.TrimSpace(stderr))
 }
 
 // SFTP returns the underlying pkg/sftp client for direct calls.

@@ -25,11 +25,15 @@ func (m *Mux) showActiveConnections() {
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("Active connections:\n\n")
+	sb.WriteString("Tracked aliases:\n\n")
 	for _, c := range snap {
 		age := time.Since(c.Started).Truncate(time.Second)
-		fmt.Fprintf(&sb, "• %s — %d ref%s — up %s\n",
-			c.Alias, c.Refs, pluralS(c.Refs), age)
+		state := "dormant"
+		if c.SockLive {
+			state = "master up"
+		}
+		fmt.Fprintf(&sb, "• %s — %d ref%s — first used %s ago — %s\n",
+			c.Alias, c.Refs, pluralS(c.Refs), age, state)
 	}
 	msgbox.Show(&m.App.Desktop.Group, msgbox.Info, sb.String(), msgbox.OKOnly)
 }

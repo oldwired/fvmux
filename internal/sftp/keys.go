@@ -6,6 +6,7 @@ import (
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/consts"
+	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
@@ -34,6 +35,7 @@ type keyHandler struct {
 	mgr    *Manager
 	remote *panel
 	local  *panel
+	dlg    *dialogs.Dialog // set by Show after construction.
 }
 
 func newKeyHandler(a *fvapp.Application, mgr *Manager, remote, local *panel) *keyHandler {
@@ -55,21 +57,41 @@ func (h *keyHandler) GetTypeID() string { return "sftpkeys" }
 // Draw is a no-op — the view is invisible.
 func (h *keyHandler) Draw() {}
 
-// HandleEvent intercepts the listing-relevant keys; everything else
-// (including Tab) passes through untouched.
+// HandleEvent intercepts the listing-relevant keys and the dialog's
+// action-button Cm codes. Everything else (including Tab) passes
+// through untouched.
 func (h *keyHandler) HandleEvent(ev *drivers.Event) {
+	if ev.What == consts.EvCommand {
+		switch ev.Command {
+		case cmSftpCopy:
+			h.copyAcross()
+			ev.What = consts.EvNothing
+		case cmSftpCancel:
+			h.mgr.CancelLast()
+			ev.What = consts.EvNothing
+		case consts.CmCancel:
+			// Dialog's own EndModal is a no-op for non-modal — close
+			// the dialog ourselves. OnClose then runs the teardown.
+			if h.dlg != nil {
+				h.dlg.Close()
+				ev.What = consts.EvNothing
+			}
+		}
+		return
+	}
 	if ev.What != consts.EvKeyDown {
 		return
 	}
 	switch ev.KeyCode {
 	case consts.KbEnter:
-		// Enter is only meaningful for listings (cd). Trees use Enter
-		// for expand/collapse via TreeView's own handler — leave alone.
+		// Enter on a listing row: cd into folder, preview a file.
+		// Trees use Enter for expand/collapse via TreeView's own
+		// handler — leave their Enter alone.
 		if p := h.focusedListingPanel(); p != nil {
 			p.listingEnter()
 			ev.What = consts.EvNothing
 		}
-	case consts.KbF5, consts.KbF6:
+	case consts.KbF5:
 		h.copyAcross()
 		ev.What = consts.EvNothing
 	case consts.KbDel:

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -358,11 +359,35 @@ func (m *Mux) sftpBrowser() {
 	if h == nil {
 		return
 	}
-	sock, _ := m.sshPool.Acquire(h.Alias)
-	if sock != "" {
-		defer m.sshPool.Release(h.Alias)
+	m.openSftpBrowser(h.Alias)
+}
+
+// openSftpBrowser is the connect-then-show flow. Splits out from
+// sftpBrowser so the auth-retry path (auth failed → SSH pane warms
+// the master → retry SFTP) can call back into it without re-running
+// the host picker.
+func (m *Mux) openSftpBrowser(alias string) {
+	// Pool registers the alias and returns the ControlPath every
+	// subsequent ssh through this alias will share. The first
+	// connection establishes the master via its own PTY (so
+	// auth prompts appear in the pane); pool spawns no processes.
+	//
+	// Browser is non-modal, so Show returns immediately. The pool
+	// Release must fire when the user actually closes the browser —
+	// thread it through the onClose callback Show invokes from
+	// d.OnClose.
+	sock := m.sshPool.Acquire(alias)
+	err := sftp.Show(m.App, alias, sock, func() { m.sshPool.Release(alias) })
+	if err == nil {
+		return
 	}
-	sftp.Show(m.App, h.Alias, sock)
+	if errors.Is(err, sftp.ErrAuthRequired) {
+		m.offerAuthThenRetry(alias)
+		return
+	}
+	msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+		"Couldn't open SFTP to %s:\n%s", []any{alias, err.Error()},
+		msgbox.OKOnly)
 }
 
 func (m *Mux) connectHost() {
@@ -377,14 +402,13 @@ func (m *Mux) connectHost() {
 	if h == nil {
 		return
 	}
-	// Try to warm a ControlMaster so subsequent connects / SFTP skip
-	// re-auth. If the pool fails (bad alias, ssh missing, etc.) fall
-	// back to a direct `ssh alias` — the connection still happens, it
-	// just re-authenticates next time.
-	args := []string{h.Alias}
-	if sock, err := m.sshPool.Acquire(h.Alias); err == nil && sock != "" {
-		args = []string{"-S", sock, h.Alias}
-	}
+	// ControlMaster=auto means this connection becomes the master if
+	// none is up yet, else it piggy-backs. Either way the auth flow
+	// runs inside this PTY pane — the password prompt (if any) lands
+	// in the pane rather than corrupting fvmux's display.
+	sock := m.sshPool.Acquire(h.Alias)
+	args := append([]string{}, sshmgr.ControlOpts(sock)...)
+	args = append(args, h.Alias)
 	prof := &profile.Profile{
 		Name:    h.Alias,
 		Command: "ssh",

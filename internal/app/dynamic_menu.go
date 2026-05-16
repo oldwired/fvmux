@@ -122,8 +122,8 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 		}
 	}
 
-	// Active SFTP transfers — read from the live manager.
-	if mgr := sftp.LiveManager(); mgr != nil {
+	// Active SFTP transfers across every open browser.
+	for _, mgr := range sftp.LiveManagers() {
 		for _, t := range mgr.Snapshot() {
 			t := t
 			short := filepath.Base(t.LocalPath)
