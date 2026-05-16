@@ -12,6 +12,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/views"
+	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
 	"github.com/oldwired/fvmux/internal/cheatsheet"
@@ -1067,21 +1068,57 @@ func (m *Mux) rerender(ws *windowState) {
 	m.refreshStatusBar()
 }
 
-// showProfilePicker stub: opens a message box listing available
-// profiles. Sub-step 5 replaces this with a proper picker dialog.
+// showProfilePicker opens a fuzzy picker over m.Opts.Profiles, the
+// same shape as sshmgr.PickHost. Picking a row spawns a new window
+// from that profile.
 func (m *Mux) showProfilePicker() {
-	var b strings.Builder
-	b.WriteString("Available profiles (pick a name, then re-run with -profile=NAME):\n\n")
-	for _, p := range m.Opts.Profiles {
-		b.WriteString("• ")
-		b.WriteString(p.Name)
-		if p.Command != "" {
-			b.WriteString(" — ")
-			b.WriteString(p.Command)
-		}
-		b.WriteByte('\n')
+	if len(m.Opts.Profiles) == 0 {
+		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
+			"No profiles defined. Edit ~/.config/fvmux/profiles.toml to add some.",
+			msgbox.OKOnly)
+		return
 	}
-	msgbox.Show(&m.App.Desktop.Group, msgbox.Info, b.String(), msgbox.OKOnly)
+	items := make([]string, len(m.Opts.Profiles))
+	for i, p := range m.Opts.Profiles {
+		items[i] = profilePickerRow(p)
+	}
+	desk := m.App.Desktop.BaseView()
+	w, h := 70, 14
+	if w > desk.Size.X-4 {
+		w = desk.Size.X - 4
+	}
+	if h > desk.Size.Y-4 {
+		h = desk.Size.Y - 4
+	}
+	x := (desk.Size.X - w) / 2
+	y := (desk.Size.Y - h) / 2
+	ff := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), items)
+	idx := ff.Run(&m.App.Desktop.Group)
+	if idx < 0 || idx >= len(m.Opts.Profiles) {
+		return
+	}
+	if _, err := m.NewWindow(m.Opts.Profiles[idx].Name); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Couldn't spawn %s:\n%s",
+			[]any{m.Opts.Profiles[idx].Name, err.Error()}, msgbox.OKOnly)
+	}
+}
+
+// profilePickerRow formats one Profile for the fuzzyfinder. Mirrors
+// sshmgr.Host.DisplayRow's shape so the two pickers feel the same.
+func profilePickerRow(p *profile.Profile) string {
+	name := p.Name
+	desc := p.Title
+	if desc == "" {
+		desc = p.Command
+		if len(p.Args) > 0 {
+			desc += " " + strings.Join(p.Args, " ")
+		}
+	}
+	if desc == "" {
+		return name
+	}
+	return name + "  —  " + desc
 }
 
 func windowInterior(w *views.Window) geom.Rect {

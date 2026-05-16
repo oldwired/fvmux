@@ -46,9 +46,6 @@ func fileMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 		item(reg, commands.CmdNewWindow),
 		item(reg, commands.CmdNewWindowFromProfile),
 	}
-	if len(extras.Profiles) > 0 {
-		items = append(items, subItems("~N~ew from Profile", itemsFromExtras(extras.Profiles)))
-	}
 	items = append(items,
 		item(reg, commands.CmdRun),
 		sep(),

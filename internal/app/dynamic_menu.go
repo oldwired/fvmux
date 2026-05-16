@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/oldwired/fvmux/internal/menus"
-	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
 )
@@ -84,17 +83,10 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 
 	var ex menus.Extras
 
-	// Themes intentionally do NOT populate a dynamic submenu — Ctrl-G T
-	// owns the picker so we have one obvious surface.
-
-	// Profiles — opens a window from the named profile.
-	for _, p := range m.Opts.Profiles {
-		p := p
-		ex.Profiles = append(ex.Profiles, menus.ExtrasItem{
-			Label: profileLabel(p),
-			Cm:    alloc(func() { _, _ = m.openWindowFromProfile(p) }),
-		})
-	}
+	// Themes and Profiles intentionally do NOT populate dynamic
+	// submenus — Ctrl-G T (theme picker) and Ctrl-G C (profile
+	// picker) each own a fuzzy picker so there's one obvious surface
+	// per kind.
 
 	// Sessions — every *.toml under paths/sessions/ becomes a row.
 	for _, s := range listSessions(m.Opts.Paths.SessionFile("__sentinel__")) {
@@ -139,16 +131,6 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 	}
 
 	return ex
-}
-
-func profileLabel(p *profile.Profile) string {
-	if p == nil {
-		return ""
-	}
-	if p.Title != "" {
-		return p.Name + " — " + p.Title
-	}
-	return p.Name
 }
 
 // listSessions returns the base names (no .toml) of every saved

@@ -16,10 +16,10 @@ type ExtrasItem struct {
 // suppress the submenu entirely so a fresh fvmux without saved
 // sessions doesn't show an empty "Open Session" submenu.
 //
-// Themes deliberately don't appear here — View → Theme Picker
-// (Ctrl-G T) is the single source of truth for theme selection.
+// Themes and Profiles deliberately don't appear here — their
+// fuzzy pickers (Ctrl-G T and Ctrl-G C) are the single source of
+// truth for selection.
 type Extras struct {
-	Profiles    []ExtrasItem // File → New from Profile
 	Sessions    []ExtrasItem // File → Open Session
 	Connections []ExtrasItem // Connections → Active Connections
 	Transfers   []ExtrasItem // Transfer → Active Transfers
