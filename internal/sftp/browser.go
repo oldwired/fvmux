@@ -151,13 +151,12 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	y := (desk.Size.Y - h) / 2
 	// Min 80×18 — tight but everything still draws: ~16-col tree,
 	// ~22-col listing, ~20-col preview, plus the transfer strip and
-	// button row. fv-go's resizeLoop reads Self().SizeLimits() to
-	// keep mouse-drag from shrinking past this.
-	d := newResizableDialog(
+	// button row.
+	d := dialogs.NewDialog(
 		geom.NewRect(x, y, x+w, y+h),
 		fmt.Sprintf("SFTP — %s", alias),
-		80, 18,
 	)
+	d.SetSizeLimits(geom.Point{X: 80, Y: 18}, geom.Point{})
 
 	// Column widths inside the dialog (inner = w-2 usable).
 	// Layout: |tree(22)|listing(32)|preview(rest)|. Two columns on
@@ -201,21 +200,17 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	d.Insert(remoteHeader)
 	d.Insert(localHeader)
 
-	// newPanel / newPreviewPane want the underlying *dialogs.Dialog
-	// for Insert/Delete — resizableDialog is a wrapper around it.
-	innerD := d.Dialog
-
 	// Remote panel (upper-left). Fixed: stays at the top of the
 	// dialog at constant width/height — extra Y goes to the local
 	// panel and TaskProgress strip, extra X goes to the preview.
-	remote := newPanel(innerD, true, c.SFTP(), remoteCwd, remoteHeader, listX1-treeX0,
+	remote := newPanel(d, true, c.SFTP(), remoteCwd, remoteHeader, listX1-treeX0,
 		geom.NewRect(treeX0, 2, treeX1, midY),
 		geom.NewRect(listX0, 2, listX1, midY),
 	)
 	// Local panel (lower-left). The tree + listing grow vertically
 	// so extra Y is consumed by the local side. The local header
 	// sits at midY and stays put (fixed Y).
-	local := newPanel(innerD, false, nil, localCwd, localHeader, listX1-treeX0,
+	local := newPanel(d, false, nil, localCwd, localHeader, listX1-treeX0,
 		geom.NewRect(treeX0, midY+1, treeX1, areaBottom),
 		geom.NewRect(listX0, midY+1, listX1, areaBottom),
 	)
@@ -227,7 +222,7 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 
 	// Preview spans the right column, full height of the panel area.
 	// Extra X and extra Y both flow into the preview.
-	pp := newPreviewPane(innerD, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
+	pp := newPreviewPane(d, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
 	pp.growMode = consts.GfGrowHiX | consts.GfGrowHiY
 	pp.applyGrowMode()
 	remote.preview = pp
@@ -253,7 +248,7 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	// (Esc / Close button) routed to d.Close since non-modal dialogs
 	// no-op on EndModal.
 	keys := newKeyHandler(a, mgr, remote, local)
-	keys.dlg = innerD
+	keys.dlg = d
 	d.Insert(keys)
 
 	// Bottom row: navigation hints (Tab / Enter / Esc are behaviors,

@@ -59,9 +59,9 @@ func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
 	x := (desk.Size.X - w) / 2
 	y := (desk.Size.Y - h) / 2
 	// Minimum 50×12 — enough for the buttons not to overlap and the
-	// editor to still show ~6 rows × ~46 cols of content. fv-go's
-	// resizeLoop calls Self().SizeLimits() to clamp drag-resizes.
-	d := newResizableDialog(geom.NewRect(x, y, x+w, y+h), title+" — "+path, 50, 12)
+	// editor to still show ~6 rows × ~46 cols of content.
+	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title+" — "+path)
+	d.SetSizeLimits(geom.Point{X: 50, Y: 12}, geom.Point{})
 
 	// Editor body — sits at (1,1) and stretches to fill the interior
 	// minus the bottom hint + button row. The scrollbar lives just
