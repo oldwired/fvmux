@@ -5,12 +5,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
 
+	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/session"
+	"github.com/oldwired/fvmux/internal/sftp"
 )
 
 // openSessionPicker fuzzy-picks a saved session and loads it. Saves
@@ -44,8 +47,14 @@ func (m *Mux) openSessionPicker() {
 			[]any{pick, err.Error()}, msgbox.OKOnly)
 		return
 	}
-	// Close existing windows before loading the new layout. Snapshot
-	// the order first because removeWindow mutates m.windowOrder.
+	// Close existing windows + browsers before loading the new
+	// layout. Browsers are dialogs (not in windowOrder) so they need
+	// the dedicated registry sweep. Also cancel any pending SFTP
+	// restore polls so a stale one from the previous session doesn't
+	// fire after we switch. Snapshot windowOrder first since
+	// removeWindow mutates it.
+	m.sftpRestore.cancelAll()
+	sftp.CloseAllBrowsers()
 	keys := append([]views.View(nil), m.windowOrder...)
 	for _, key := range keys {
 		if ws := m.windows[key]; ws != nil {
@@ -58,6 +67,61 @@ func (m *Mux) openSessionPicker() {
 			"Loading session %s failed:\n%s",
 			[]any{pick, err.Error()}, msgbox.OKOnly)
 	}
+}
+
+// newSession is File → New Session: close every existing window
+// (after a single confirm if any have live panes), clear the session
+// name, then open one starter window from the default profile. Stays
+// un-named until the user does Save (which becomes Save As) or Save
+// Session As.
+func (m *Mux) newSession() {
+	if !m.canCloseAllWindows() {
+		return
+	}
+	// SFTP browsers are desktop dialogs, not windows in m.windowOrder
+	// — close them via the sftp package's own registry before the
+	// window loop runs. Also cancel any pending session-restore SFTP
+	// polls so a stale one doesn't pop a browser after the user has
+	// moved on.
+	m.sftpRestore.cancelAll()
+	sftp.CloseAllBrowsers()
+	keys := append([]views.View(nil), m.windowOrder...)
+	for _, key := range keys {
+		if ws := m.windows[key]; ws != nil {
+			m.removeWindow(ws)
+		}
+	}
+	m.Opts.SessionName = ""
+	if _, err := m.NewWindow(""); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Couldn't open starter window:\n%s",
+			[]any{err.Error()}, msgbox.OKOnly)
+	}
+}
+
+// canCloseAllWindows shows a single confirm dialog when any window
+// has live panes. Returns true to proceed, false to abort.
+func (m *Mux) canCloseAllWindows() bool {
+	alive := 0
+	for _, ws := range m.windows {
+		if ws == nil || ws.Root == nil {
+			continue
+		}
+		ws.Root.Leaves(func(l *layout.PaneNode) {
+			if l.Pane != nil && !l.Pane.Dead {
+				alive++
+			}
+		})
+	}
+	if alive == 0 {
+		return true
+	}
+	if !m.Opts.Config.General.ConfirmKill {
+		return true
+	}
+	body := "Close every window and start a fresh session?"
+	got := msgbox.Show(&m.App.Desktop.Group, msgbox.Question, body, msgbox.YesNo)
+	return got == consts.CmYes
 }
 
 // saveSessionAs prompts for a new name and writes the current snapshot
@@ -78,34 +142,6 @@ func (m *Mux) saveSessionAs() {
 	}
 	msgbox.Showf(&m.App.Desktop.Group, msgbox.Info,
 		"Saved as %s.", []any{name}, msgbox.OKOnly)
-}
-
-// renameSessionFile asks for a new name and renames the on-disk file.
-// Updates m.Opts.SessionName.
-func (m *Mux) renameSessionFile() {
-	if m.Opts.SessionName == "" {
-		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-			"No active session to rename. Start fvmux with -session=NAME first.",
-			msgbox.OKOnly)
-		return
-	}
-	newName, ok := promptString(m.App, "Rename Session",
-		"New name:", m.Opts.SessionName)
-	if !ok || strings.TrimSpace(newName) == "" {
-		return
-	}
-	newName = strings.TrimSpace(newName)
-	if newName == m.Opts.SessionName {
-		return
-	}
-	oldPath := m.Opts.Paths.SessionFile(m.Opts.SessionName)
-	newPath := m.Opts.Paths.SessionFile(newName)
-	if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
-			"Rename failed:\n%s", []any{err.Error()}, msgbox.OKOnly)
-		return
-	}
-	m.Opts.SessionName = newName
 }
 
 func (m *Mux) savedSessionNames() []string {

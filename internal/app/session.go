@@ -11,16 +11,18 @@ import (
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
+	"github.com/oldwired/fvmux/internal/sftp"
+	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
 // SaveSession captures the current window/layout state to TOML under
-// the configured paths. No-op (with a status flash) when no session
-// name is set.
+// the configured paths. When no session is currently named (i.e., the
+// user didn't pass -session=NAME and hasn't picked one yet) falls
+// through to Save As so the user gets prompted instead of hitting a
+// dead end.
 func (m *Mux) SaveSession() {
 	if m.Opts.SessionName == "" {
-		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-			"No session name set. Pass -session=NAME on the command line.",
-			msgbox.OKOnly)
+		m.saveSessionAs()
 		return
 	}
 	snap := m.buildSnapshot()
@@ -50,7 +52,22 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 		Created: time.Now(),
 		Active:  0,
 	}
-	cur := m.App.Desktop.Current()
+	// Live SFTP browsers — one alias per open dialog. Dedup so two
+	// browsers to the same alias only record once (restore will only
+	// reopen once anyway).
+	seen := map[string]bool{}
+	for _, mgr := range sftp.LiveManagers() {
+		if mgr == nil || mgr.Alias == "" || seen[mgr.Alias] {
+			continue
+		}
+		seen[mgr.Alias] = true
+		snap.SFTPAliases = append(snap.SFTPAliases, mgr.Alias)
+	}
+	// Active-window index: Desktop.Current() can be a dialog (SFTP
+	// browser, msgbox) — fall back to m.lastFocused so we capture the
+	// most recently focused fvmux window, not whichever popup happens
+	// to be on top.
+	cur := m.activeWindowKey()
 	for i, key := range m.windowOrder {
 		ws := m.windows[key]
 		if ws == nil {
@@ -77,10 +94,11 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 	return snap
 }
 
-// LoadSession restores a snapshot, creating one window per snapshot
-// entry and spawning panes via the configured profiles. Existing windows
-// are left untouched — callers typically invoke LoadSession before any
-// NewWindow is called.
+// LoadSession restores a snapshot: one window per snapshot entry +
+// every SFTP browser the user had open. Callers should close existing
+// windows first (openSessionPicker does); LoadSession itself does
+// not — that lets it be used both for full session swap and for
+// initial bootstrap.
 func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	if snap == nil {
 		return nil
@@ -95,7 +113,43 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	if snap.Active >= 0 && snap.Active < len(m.windowOrder) {
 		m.App.Desktop.Focus(m.windowOrder[snap.Active])
 	}
+	// SFTP browsers — schedule each. The restored ssh pane (if any)
+	// for the same alias is already up and running; we just poll for
+	// the master socket and open SFTP non-interactively when it
+	// appears. If auth never completes within the timeout, the browser
+	// silently doesn't open.
+	for _, alias := range snap.SFTPAliases {
+		alias := alias
+		m.scheduleSftpRestore(alias)
+	}
 	return nil
+}
+
+// resolveProfileFallback fires when a saved pane's Profile name isn't
+// a registered profile. The common case is ssh sessions opened via
+// Ctrl-G H, whose Pane.Profile == the host alias. We look that alias
+// up in hosts.toml + ~/.ssh/config; on a hit, synthesize an ssh
+// command (with ControlOpts so the master is reused). Otherwise fall
+// back to the default shell profile.
+func (m *Mux) resolveProfileFallback(name string) *profile.Profile {
+	if name != "" && m.sshPool != nil {
+		if hosts, _ := sshmgr.Load(m.Opts.Paths.HostsFile()); len(hosts) > 0 {
+			for _, h := range hosts {
+				if h != nil && h.Alias == name {
+					sock := m.sshPool.Acquire(h.Alias)
+					args := append([]string{}, sshmgr.ControlOpts(sock)...)
+					args = append(args, h.Alias)
+					return &profile.Profile{
+						Name:    h.Alias,
+						Command: "ssh",
+						Args:    args,
+						Title:   h.Alias,
+					}
+				}
+			}
+		}
+	}
+	return profile.Defaults()[0]
 }
 
 func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) error {
@@ -105,7 +159,12 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 	spawn := func(spec layout.LeafSpec) (*session.Pane, error) {
 		prof := profile.Find(m.Opts.Profiles, spec.Profile)
 		if prof == nil {
-			prof = profile.Defaults()[0]
+			// Profile name not in profiles.toml — see if it's an
+			// SSH host alias from hosts.toml / ~/.ssh/config and
+			// synthesize an inline ssh profile if so. Without this
+			// fallback, restored ssh panes silently turn into
+			// generic shells.
+			prof = m.resolveProfileFallback(spec.Profile)
 		}
 		pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
 		if err != nil {

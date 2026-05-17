@@ -37,7 +37,7 @@ func TestTransfer_RequestCancel_Idempotent(t *testing.T) {
 }
 
 func TestCancelLast_DoubleCallSafe(t *testing.T) {
-	m := NewManager()
+	m := NewManager("test-alias")
 	tr := newActiveTransfer()
 	m.mu.Lock()
 	m.list = append(m.list, tr)
@@ -62,7 +62,7 @@ func TestCancelLast_DoubleCallSafe(t *testing.T) {
 }
 
 func TestCancelLast_ConcurrentRace(t *testing.T) {
-	m := NewManager()
+	m := NewManager("test-alias")
 	tr := newActiveTransfer()
 	m.mu.Lock()
 	m.list = append(m.list, tr)
@@ -86,7 +86,7 @@ func TestCancelLast_ConcurrentRace(t *testing.T) {
 }
 
 func TestCancelAll(t *testing.T) {
-	m := NewManager()
+	m := NewManager("test-alias")
 	a, b, c := newActiveTransfer(), newActiveTransfer(), newActiveTransfer()
 	m.mu.Lock()
 	m.list = append(m.list, a, b, c)
@@ -105,7 +105,7 @@ func TestCancelAll(t *testing.T) {
 }
 
 func TestCancelLast_NoActive(t *testing.T) {
-	m := NewManager()
+	m := NewManager("test-alias")
 	if m.CancelLast() {
 		t.Fatal("CancelLast on empty manager should return false")
 	}

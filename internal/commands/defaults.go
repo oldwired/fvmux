@@ -112,9 +112,9 @@ func Defaults() *Registry {
 	})
 
 	// Session lifecycle extras.
+	r.Register(&Command{ID: CmdNewSession, Category: "File", Name: "New Session", MenuLabel: "Ne~w~ Session"})
 	r.Register(&Command{ID: CmdOpenSession, Category: "File", Name: "Open Session…", MenuLabel: "~O~pen Session…", Chord: "C-g s"})
 	r.Register(&Command{ID: CmdSaveSessionAs, Category: "File", Name: "Save Session As…", MenuLabel: "Save Session ~A~s…"})
-	r.Register(&Command{ID: CmdRenameSession, Category: "File", Name: "Rename Session…", MenuLabel: "Rename Sess~i~on…", Chord: "C-g $"})
 
 	// Pane rename.
 	r.Register(&Command{ID: CmdRenamePane, Category: "Pane", Name: "Rename Pane…", MenuLabel: "Rename ~P~ane…"})

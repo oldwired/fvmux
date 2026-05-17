@@ -77,6 +77,25 @@ func removeLiveMgr(m *Manager) {
 	liveMgrs = out
 }
 
+// CloseAllBrowsers dismisses every open SFTP browser dialog. Used by
+// File → New Session to clear desktop state (browsers are dialogs,
+// not windows, so they aren't reached by the per-window close loop).
+// Snapshots the close functions first so the OnClose hooks can
+// mutate liveMgrs without invalidating our iteration.
+func CloseAllBrowsers() {
+	liveMu.Lock()
+	closers := make([]func(), 0, len(liveMgrs))
+	for _, m := range liveMgrs {
+		if m != nil && m.closeFn != nil {
+			closers = append(closers, m.closeFn)
+		}
+	}
+	liveMu.Unlock()
+	for _, c := range closers {
+		c()
+	}
+}
+
 // Show opens an SFTP browser modal against alias. Five regions:
 //
 //   - upper-left tree  : remote folders, lazy-expanded via OnExpand.
@@ -217,7 +236,8 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	// Transfer manager + TaskProgress strip. Browser is non-modal, so
 	// the manager + ticker are registered for the dialog's whole
 	// lifetime and torn down from d.OnClose (set below).
-	mgr := NewManager()
+	mgr := NewManager(alias)
+	mgr.SetCloseFn(func() { d.Close() })
 	addLiveMgr(mgr)
 
 	// TaskProgress strip: stays anchored to its row band but slides

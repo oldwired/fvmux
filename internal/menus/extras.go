@@ -14,13 +14,12 @@ type ExtrasItem struct {
 
 // Extras bundles every dynamic submenu Build assembles. Empty slices
 // suppress the submenu entirely so a fresh fvmux without saved
-// sessions doesn't show an empty "Open Session" submenu.
+// sessions doesn't show an empty submenu.
 //
-// Themes and Profiles deliberately don't appear here — their
-// fuzzy pickers (Ctrl-G T and Ctrl-G C) are the single source of
-// truth for selection.
+// Themes, Profiles, and Sessions deliberately don't appear here —
+// their fuzzy pickers (Ctrl-G T, Ctrl-G C, Ctrl-G s) are the single
+// source of truth for selection.
 type Extras struct {
-	Sessions    []ExtrasItem // File → Open Session
 	Connections []ExtrasItem // Connections → Active Connections
 	Transfers   []ExtrasItem // Transfer → Active Transfers
 }

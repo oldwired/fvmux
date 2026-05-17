@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
@@ -82,14 +83,25 @@ func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
 
 	// Hint pinned to the bottom band, stretching with the dialog's
 	// width. Hint text varies by mode: reload-style editors say so.
-	hintText := "Enter / Save: save and close · Esc: discard"
+	keyHint := "Enter / Save: save and close · Esc: discard"
 	if onSave != nil {
-		hintText = "Save commits + reloads · Esc discards"
+		keyHint = "Save commits + reloads · Esc discards"
 	}
+	// Initial position read via Position() (always valid) so the hint
+	// already shows L:C 1:1 before the user touches anything.
+	line, col := ed.Position()
 	hint := dialogs.NewStaticText(
-		geom.NewRect(2, h-3, w-2, h-2), hintText)
+		geom.NewRect(2, h-3, w-2, h-2),
+		formatEditorHint(line, col, keyHint))
 	hint.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY | consts.GfGrowHiX
 	d.Insert(hint)
+	// OnCursorMove fires once per Draw when (line, col) changes. We
+	// mutate the hint's Text in place — the hint will repaint on the
+	// next dialog draw cycle that the editor's own MarkDirty kicks
+	// off (every cursor movement triggers a redraw anyway).
+	ed.OnCursorMove = func(line, col int) {
+		hint.Text = formatEditorHint(line, col, keyHint)
+	}
 
 	// Buttons pinned to the bottom-right corner — GfGrowAll shifts
 	// every corner by the parent's delta, which for an x-only / y-only
@@ -124,4 +136,11 @@ func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
 	msgbox.Showf(&m.App.Desktop.Group, msgbox.Info,
 		"Saved %s\n\n(Some changes apply on restart.)",
 		[]any{path}, msgbox.OKOnly)
+}
+
+// formatEditorHint renders the bottom-row text with the current
+// cursor position on the left followed by the key hints. 1-indexed
+// to match the editor's Position() convention.
+func formatEditorHint(line, col int, keyHint string) string {
+	return fmt.Sprintf("L:C %d:%d  ·  %s", line, col, keyHint)
 }

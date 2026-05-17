@@ -65,24 +65,38 @@ type windowState struct {
 }
 
 // composeTitle is windowState's caption formula. See the type comment.
-func composeTitle(userTitle, shellTitle, fallback string) string {
+// paneTitle, when distinct from what the base caption already shows,
+// is appended as " · paneTitle" so the focused-pane name surfaces in
+// the title bar — useful when a window holds a split tree where each
+// pane has its own identity (e.g., rename-pane gave it a custom name
+// that the focused shell hasn't echoed back as OSC yet).
+func composeTitle(userTitle, shellTitle, fallback, paneTitle string) string {
+	var base string
 	switch {
 	case userTitle != "" && shellTitle != "":
-		return "[" + userTitle + "] " + shellTitle
+		base = "[" + userTitle + "] " + shellTitle
 	case userTitle != "":
-		return "[" + userTitle + "]"
+		base = "[" + userTitle + "]"
 	case shellTitle != "":
-		return shellTitle
+		base = shellTitle
 	default:
-		return fallback
+		base = fallback
 	}
+	if paneTitle != "" && paneTitle != shellTitle && !strings.Contains(base, paneTitle) {
+		base += " · " + paneTitle
+	}
+	return base
 }
 
 func (m *Mux) refreshWindowTitle(ws *windowState) {
 	if ws == nil || ws.Frame == nil {
 		return
 	}
-	ws.Frame.SetTitle(composeTitle(ws.UserTitle, ws.ShellTitle, ws.Title))
+	pt := ""
+	if ws.Focus != nil && ws.Focus.Pane != nil {
+		pt = ws.Focus.Pane.Title
+	}
+	ws.Frame.SetTitle(composeTitle(ws.UserTitle, ws.ShellTitle, ws.Title, pt))
 }
 
 // Options bundles everything Mux needs at construction time. Each
@@ -137,6 +151,8 @@ type Mux struct {
 
 	eggMu     sync.Mutex
 	eggTimers []*time.Timer // pending easter-egg AfterFunc handles.
+
+	sftpRestore sftpRestoreTracker
 }
 
 // NewMux builds a Mux around the given Application, registry, and options.
@@ -240,9 +256,9 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdReloadConfig, m.ReloadConfig)
 	bind(commands.CmdLogViewer, m.showLogViewer)
 
+	bind(commands.CmdNewSession, m.newSession)
 	bind(commands.CmdOpenSession, m.openSessionPicker)
 	bind(commands.CmdSaveSessionAs, m.saveSessionAs)
-	bind(commands.CmdRenameSession, m.renameSessionFile)
 	bind(commands.CmdRenamePane, m.renamePane)
 	bind(commands.CmdToggleClock, m.toggleClock)
 	bind(commands.CmdToggleStatusBar, m.toggleStatusBar)
@@ -822,6 +838,7 @@ func (m *Mux) doFocusDir(dir layout.Direction) {
 		if next.Pane != nil {
 			focusTerminalPath(ws.Frame, next.Pane.Term)
 		}
+		m.refreshWindowTitle(ws)
 		m.refreshStatusBar()
 	}
 }
@@ -903,6 +920,36 @@ func (m *Mux) cycleWindow(direction int) {
 	}
 	next := (idx + direction + len(m.windowOrder)) % len(m.windowOrder)
 	m.focusWindowView(m.windowOrder[next])
+}
+
+// activeWindowKey returns the windowOrder key for the most recently
+// focused fvmux window. Walks back through Desktop.Children when
+// Current() is a dialog (SFTP browser, msgbox), so the snapshot
+// captures the window the user was actually working in rather than
+// the popup that happens to be on top. nil ⇒ no windows.
+func (m *Mux) activeWindowKey() views.View {
+	if cur := m.App.Desktop.Current(); cur != nil {
+		if _, ok := m.windows[cur]; ok {
+			return cur
+		}
+	}
+	// Topmost fvmux window in z-order (skip dialogs and the mouse
+	// listener).
+	children := m.App.Desktop.Children
+	for i := len(children) - 1; i >= 0; i-- {
+		if _, ok := m.windows[children[i]]; ok {
+			return children[i]
+		}
+	}
+	if m.lastFocused != nil {
+		if _, ok := m.windows[m.lastFocused]; ok {
+			return m.lastFocused
+		}
+	}
+	if len(m.windowOrder) > 0 {
+		return m.windowOrder[0]
+	}
+	return nil
 }
 
 // focusWindowView is the single point that updates desktop focus.

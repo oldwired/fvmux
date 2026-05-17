@@ -73,14 +73,25 @@ func (t *Transfer) Error() string {
 	return ""
 }
 
-// Manager owns all in-flight + recent SFTP transfers.
+// Manager owns all in-flight + recent SFTP transfers. Alias is the
+// SSH host this browser is bound to — read by session-snapshot save
+// so reopening the session restores the right browsers. closeFn,
+// when set, closes the browser dialog that owns this manager (used
+// by CloseAllBrowsers).
 type Manager struct {
+	Alias   string
+	closeFn func()
+
 	mu   sync.Mutex
 	list []*Transfer
 }
 
-// NewManager returns an empty transfer manager.
-func NewManager() *Manager { return &Manager{} }
+// NewManager returns an empty transfer manager bound to alias.
+func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
+
+// SetCloseFn lets the browser register its close action against the
+// manager so CloseAllBrowsers can dismiss it.
+func (m *Manager) SetCloseFn(fn func()) { m.closeFn = fn }
 
 // Start enqueues an upload or download against c and kicks off the
 // goroutine. The returned Transfer is the manager's tracking entry —

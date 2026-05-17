@@ -22,6 +22,7 @@ func (m *Mux) renamePane() {
 		return
 	}
 	ws.Focus.Pane.Title = text
+	m.refreshWindowTitle(ws)
 	m.refreshStatusBar()
 }
 

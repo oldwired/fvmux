@@ -2,14 +2,11 @@ package app
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/oldwired/fvmux/internal/menus"
-	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
 )
 
@@ -83,23 +80,9 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 
 	var ex menus.Extras
 
-	// Themes and Profiles intentionally do NOT populate dynamic
-	// submenus — Ctrl-G T (theme picker) and Ctrl-G C (profile
-	// picker) each own a fuzzy picker so there's one obvious surface
-	// per kind.
-
-	// Sessions — every *.toml under paths/sessions/ becomes a row.
-	for _, s := range listSessions(m.Opts.Paths.SessionFile("__sentinel__")) {
-		s := s
-		ex.Sessions = append(ex.Sessions, menus.ExtrasItem{
-			Label: "open: " + s,
-			Cm: alloc(func() {
-				if snap, err := session.Load(m.Opts.Paths.SessionFile(s)); err == nil {
-					_ = m.LoadSession(snap)
-				}
-			}),
-		})
-	}
+	// Themes, Profiles, and Sessions intentionally do NOT populate
+	// dynamic submenus — Ctrl-G T, Ctrl-G C, and Ctrl-G s each own a
+	// fuzzy picker so there's one obvious surface per kind.
 
 	// Active SSH masters.
 	if m.sshPool != nil {
@@ -131,24 +114,4 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 	}
 
 	return ex
-}
-
-// listSessions returns the base names (no .toml) of every saved
-// session file. sentinel is one canonical SessionFile result we use
-// only to extract the directory — avoids leaking paths.Sessions().
-func listSessions(sentinel string) []string {
-	dir := filepath.Dir(sentinel)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		n := e.Name()
-		if !strings.HasSuffix(n, ".toml") {
-			continue
-		}
-		out = append(out, strings.TrimSuffix(n, ".toml"))
-	}
-	return out
 }

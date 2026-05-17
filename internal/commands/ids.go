@@ -102,9 +102,11 @@ const (
 	CmdLogViewer      uint16 = 1067 // Ctrl-G L — open log viewer modal.
 
 	// 1068s — session lifecycle + view toggles + misc utility.
-	CmdOpenSession     uint16 = 1068 // Ctrl-G s
-	CmdSaveSessionAs   uint16 = 1069
-	CmdRenameSession   uint16 = 1070 // Ctrl-G $
+	CmdOpenSession   uint16 = 1068 // Ctrl-G s
+	CmdSaveSessionAs uint16 = 1069
+	// 1070 was CmdRenameSession (Ctrl-G $); dropped — Save As covers
+	// the rename-on-write case and is the only path the UI exposes.
+	CmdNewSession      uint16 = 1078 // File → New Session (close all, open one starter)
 	CmdRenamePane      uint16 = 1071
 	CmdToggleClock     uint16 = 1072 // Ctrl-G t
 	CmdToggleStatusBar uint16 = 1073

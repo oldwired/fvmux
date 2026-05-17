@@ -1,7 +1,9 @@
 package app
 
 import (
-	"os"
+	"io"
+	"log/slog"
+	"os/exec"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
@@ -9,6 +11,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 
 	"github.com/oldwired/fvmux/internal/profile"
+	"github.com/oldwired/fvmux/internal/sftp"
 	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
@@ -66,18 +69,97 @@ func (m *Mux) offerAuthThenRetry(alias string) {
 	})
 }
 
-// pollForMaster looks for the ControlMaster socket file at sock,
-// every 500 ms up to timeout. Calls done(true) when found, done(false)
-// on timeout. Runs in a goroutine — done is called from the goroutine,
-// caller marshals onto the UI thread.
+// pollForMaster waits for the ControlMaster behind sock to be alive
+// AND authenticated. Uses `ssh -O check` rather than os.Stat because
+// the socket file appears the moment ssh starts (before auth
+// completes), and an SFTP open through a still-handshaking master
+// fails with auth-required.
+//
+// Calls done(true) when check reports success, done(false) on
+// timeout. Runs in a goroutine — caller marshals onto the UI thread.
 func pollForMaster(alias, sock string, timeout time.Duration, done func(ok bool)) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
+		if masterAlive(alias, sock) {
 			done(true)
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	done(false)
+}
+
+// masterAlive runs `ssh -O check -o ControlPath=sock alias` and
+// returns true iff exit status is 0. Stdout/stderr suppressed so the
+// poll doesn't spam the outer terminal.
+func masterAlive(alias, sock string) bool {
+	cmd := exec.Command("ssh",
+		"-O", "check",
+		"-o", "ControlPath="+sock,
+		alias,
+	)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
+}
+
+// scheduleSftpRestore is the session-restore counterpart to
+// offerAuthThenRetry. Same poll-then-act shape but no msgbox prompt
+// — the user is presumed to be authenticating in the SSH pane that
+// the session just reopened. When the master is alive AND
+// authenticated, the SFTP browser opens. Unlike the picker path, a
+// failed SFTP open here does NOT cascade into another offer-to-auth
+// dialog (otherwise restore could spawn a duplicate ssh pane).
+//
+// Registered in m.sftpRestore so session-change surfaces can cancel
+// in-flight restores — without this, a stale poll from the previous
+// session could pop a SFTP browser the next time the user opens an
+// SSH connection to the same alias.
+//
+// 30 s timeout (used to be 120 s) — enough time to type a passphrase
+// without leaving a stale poll lingering past the user's attention.
+func (m *Mux) scheduleSftpRestore(alias string) {
+	sock := m.sshPool.Acquire(alias)
+	cancel := m.sftpRestore.start(alias)
+	go func() {
+		defer m.sftpRestore.finish(alias, cancel)
+		alive := pollForMasterCancellable(alias, sock, 30*time.Second, cancel)
+		views.CallSoon(func() {
+			m.sshPool.Release(alias)
+			if !alive {
+				return
+			}
+			// Direct sftp.Show — bypass openSftpBrowser to avoid its
+			// offerAuthThenRetry fallback. If the master is alive but
+			// SFTP somehow still fails, log and move on.
+			sock := m.sshPool.Acquire(alias)
+			if err := sftp.Show(m.App, alias, sock, func() { m.sshPool.Release(alias) }); err != nil {
+				m.sshPool.Release(alias)
+				slog.Warn("session restore: sftp browser open failed",
+					"alias", alias, "err", err)
+			}
+		})
+	}()
+}
+
+// pollForMasterCancellable is pollForMaster with a cancel channel.
+// Returns true iff the master became alive before the channel closed
+// or the deadline elapsed.
+func pollForMasterCancellable(alias, sock string, timeout time.Duration, cancel <-chan struct{}) bool {
+	deadline := time.Now().Add(timeout)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if masterAlive(alias, sock) {
+			return true
+		}
+		select {
+		case <-cancel:
+			return false
+		case <-tick.C:
+			if time.Now().After(deadline) {
+				return false
+			}
+		}
+	}
 }

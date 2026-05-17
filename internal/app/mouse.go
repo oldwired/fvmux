@@ -158,6 +158,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		if leaf != ws.Focus && leaf.Pane != nil {
 			ws.Focus = leaf
 			focusTerminalPath(ws.Frame, leaf.Pane.Term)
+			m.refreshWindowTitle(ws)
 			m.refreshStatusBar()
 		}
 		if debug.Mouse() {
@@ -169,6 +170,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		if leaf != ws.Focus && leaf.Pane != nil {
 			ws.Focus = leaf
 			focusTerminalPath(ws.Frame, leaf.Pane.Term)
+			m.refreshWindowTitle(ws)
 			m.refreshStatusBar()
 		}
 		m.showPaneContextMenu(ev.Where)

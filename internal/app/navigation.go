@@ -61,6 +61,7 @@ func (m *Mux) focusNextPaneInTree(direction int) {
 	if next.Pane != nil {
 		focusTerminalPath(ws.Frame, next.Pane.Term)
 	}
+	m.refreshWindowTitle(ws)
 	m.refreshStatusBar()
 }
 

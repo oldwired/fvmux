@@ -49,15 +49,10 @@ func fileMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 	items = append(items,
 		item(reg, commands.CmdRun),
 		sep(),
+		item(reg, commands.CmdNewSession),
 		item(reg, commands.CmdOpenSession),
-	)
-	if len(extras.Sessions) > 0 {
-		items = append(items, subItems("Open Session ~S~ubmenu", itemsFromExtras(extras.Sessions)))
-	}
-	items = append(items,
 		item(reg, commands.CmdSaveSession),
 		item(reg, commands.CmdSaveSessionAs),
-		item(reg, commands.CmdRenameSession),
 		sep(),
 		item(reg, commands.CmdOpenConfig),
 		item(reg, commands.CmdOpenProfiles),

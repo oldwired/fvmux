@@ -15,11 +15,17 @@ import (
 // position, title, and layout (encoded via internal/layout/serde) so a
 // later run with -session=<name> can restore the same workspace.
 type Snapshot struct {
-	Name     string            `toml:"name"`
-	Created  time.Time         `toml:"created"`
-	Active   int               `toml:"active"`
-	Windows  []*WindowSnapshot `toml:"window"`
-	MetaPath string            `toml:"-"`
+	Name    string            `toml:"name"`
+	Created time.Time         `toml:"created"`
+	Active  int               `toml:"active"`
+	Windows []*WindowSnapshot `toml:"window"`
+
+	// SFTPAliases lists every SFTP browser open at save time, keyed by
+	// SSH host alias. On Load the runtime queues a re-open for each;
+	// see internal/app/session.go for the polling auth-aware retry.
+	SFTPAliases []string `toml:"sftp_aliases,omitempty"`
+
+	MetaPath string `toml:"-"`
 }
 
 // WindowSnapshot is one window inside a Snapshot.
