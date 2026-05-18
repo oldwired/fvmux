@@ -255,6 +255,7 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdResetFirstRun, m.resetFirstRunWizard)
 	bind(commands.CmdReloadConfig, m.ReloadConfig)
 	bind(commands.CmdLogViewer, m.showLogViewer)
+	bind(commands.CmdAbout, m.showAbout)
 
 	bind(commands.CmdNewSession, m.newSession)
 	bind(commands.CmdOpenSession, m.openSessionPicker)
@@ -699,7 +700,7 @@ func (m *Mux) RunFirstRunWizard() {
 		}
 		return m.Opts.Themes[idx].Name
 	}
-	result := splash.Run(m.App, currentPrefix, currentShell, pickTheme)
+	result := splash.Run(m.App, currentPrefix, currentShell, m.Opts.Paths.Root, pickTheme)
 	if result.QuitRequested {
 		// User picked "Quit fvmux" from the welcome dialog. Route
 		// via CmQuitApp so OnQuitRequest fires and graceful save runs.
@@ -722,6 +723,9 @@ func (m *Mux) RunFirstRunWizard() {
 	}
 	if dirty {
 		_ = config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config)
+	}
+	if result.InstallGlue {
+		m.installGlue()
 	}
 	// Mark first-run as done — persists across restarts. The caller
 	// may already have set this; SaveState is cheap and idempotent.

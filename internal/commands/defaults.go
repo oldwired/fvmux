@@ -110,6 +110,12 @@ func Defaults() *Registry {
 		MenuLabel: "Lo~g~ Viewer",
 		Chord:     "C-g L",
 	})
+	r.Register(&Command{
+		ID:        CmdAbout,
+		Category:  "Help",
+		Name:      "About fvmux…",
+		MenuLabel: "~A~bout fvmux…",
+	})
 
 	// Session lifecycle extras.
 	r.Register(&Command{ID: CmdNewSession, Category: "File", Name: "New Session", MenuLabel: "Ne~w~ Session"})

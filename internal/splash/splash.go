@@ -20,11 +20,15 @@ import (
 // Empty PrefixKey / Shell / Theme means "user kept the current value"
 // — caller should treat as no-op for that field. QuitRequested ==
 // true means the user clicked "Quit fvmux" in the welcome dialog;
-// the caller should exit the app.
+// the caller should exit the app. InstallGlue == true means the user
+// opted into the fvmuxa wrapper install; the caller invokes
+// glue.Install() to actually write the files (splash itself never
+// touches disk).
 type Result struct {
 	PrefixKey     string
 	Shell         string
 	Theme         string
+	InstallGlue   bool
 	QuitRequested bool
 }
 
@@ -36,16 +40,18 @@ type Result struct {
 type ThemeChoice func() string
 
 // Run drives the wizard: splash → welcome → (optional tour) → prefix
-// picker → shell picker → theme picker. currentPrefixKey /
-// currentShell are the values currently in config.toml, shown as the
-// active selection in each picker (an empty currentShell means
-// "honour $SHELL"). pickTheme, when non-nil, opens the host's live
-// theme picker after the shell step.
+// picker → shell picker → theme picker → optional glue installer.
+// currentPrefixKey / currentShell are the values currently in
+// config.toml, shown as the active selection in each picker (an empty
+// currentShell means "honour $SHELL"). pickTheme, when non-nil, opens
+// the host's live theme picker after the shell step. confDir is
+// fvmux's config root — the glue step uses it to decide where
+// fvmux.tmux.conf belongs and whether it's already installed.
 //
 // The caller is responsible for persisting Result and flipping
 // state.FirstRunDone — keeping Run side-effect-free makes the same
 // function usable for both first-launch and Help → Reset First-Run.
-func Run(a *fvapp.Application, currentPrefixKey, currentShell string, pickTheme ThemeChoice) Result {
+func Run(a *fvapp.Application, currentPrefixKey, currentShell, confDir string, pickTheme ThemeChoice) Result {
 	showSplash(a)
 	choice := showWelcome(a)
 	switch choice {
@@ -60,7 +66,13 @@ func Run(a *fvapp.Application, currentPrefixKey, currentShell string, pickTheme 
 	if pickTheme != nil {
 		pickedTheme = pickTheme()
 	}
-	return Result{PrefixKey: pickedPrefix, Shell: pickedShell, Theme: pickedTheme}
+	installGlue := askGlue(a, confDir)
+	return Result{
+		PrefixKey:   pickedPrefix,
+		Shell:       pickedShell,
+		Theme:       pickedTheme,
+		InstallGlue: installGlue,
+	}
 }
 
 func showSplash(a *fvapp.Application) {

@@ -21,11 +21,13 @@ install:
 
 # install-glue lays down the fvmuxa wrapper + its private tmux config.
 # Run `make install` first so `fvmux` itself is on PATH; the wrapper
-# checks for it at launch.
+# checks for it at launch. The same files are embedded into the fvmux
+# binary and the first-run wizard offers to install them — this target
+# is just the non-interactive equivalent for source checkouts.
 install-glue:
 	@mkdir -p $(GLUE_BIN) $(GLUE_CONF)
-	@install -m 0755 scripts/fvmuxa $(GLUE_BIN)/fvmuxa
-	@install -m 0644 scripts/fvmux.tmux.conf $(GLUE_CONF)/fvmux.tmux.conf
+	@install -m 0755 internal/glue/fvmuxa $(GLUE_BIN)/fvmuxa
+	@install -m 0644 internal/glue/fvmux.tmux.conf $(GLUE_CONF)/fvmux.tmux.conf
 	@echo "installed:"
 	@echo "  $(GLUE_BIN)/fvmuxa"
 	@echo "  $(GLUE_CONF)/fvmux.tmux.conf"

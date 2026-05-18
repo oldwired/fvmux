@@ -215,6 +215,8 @@ func helpMenu(reg *commands.Registry) *fvmenus.Menu {
 		item(reg, commands.CmdReloadConfig),
 		sep(),
 		item(reg, commands.CmdResetFirstRun),
+		sep(),
+		item(reg, commands.CmdAbout),
 	)
 }
 

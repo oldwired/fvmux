@@ -75,16 +75,29 @@ What's solid:
 
 ## Install
 
-fvmux depends on [fv-go][fvgo] via a local `replace` directive — clone
-both repos as siblings:
+### Pre-built binary
 
-```
-~/code/oldwired/
-├── fv-go/      # checkout of github.com/oldwired/fv-go
-└── fvmux/      # this repo
-```
+Each release publishes binaries for linux/{amd64,arm64},
+darwin/{amd64,arm64}, and windows/amd64, plus `checksums.txt`, an
+SPDX SBOM (`fvmux.spdx.json`), and `LICENSE`. Grab the matching asset
+from the [releases page][releases], verify its hash against
+`checksums.txt`, `chmod +x`, and drop it on `PATH`.
+
+[releases]: https://github.com/oldwired/fvmux/releases
+
+### From source
+
+`go.mod` pins a real fv-go pseudo-version, so a plain `go install`
+works without any extra setup:
 
 ```sh
+go install github.com/oldwired/fvmux/cmd/fvmux@latest
+```
+
+Or from a clone:
+
+```sh
+git clone https://github.com/oldwired/fvmux
 cd fvmux
 make build         # go build ./...
 make install       # go install ./cmd/fvmux  (puts fvmux on $GOPATH/bin)
@@ -93,15 +106,49 @@ make install       # go install ./cmd/fvmux  (puts fvmux on $GOPATH/bin)
 `go install` deposits the binary in `$(go env GOPATH)/bin`. If that's
 not on your `PATH`, add it.
 
+### Hacking on both fvmux and fv-go
+
+To make local edits in fv-go visible to fvmux without publishing first,
+clone both repos as siblings and drop a gitignored `go.work` at the
+fvmux root:
+
+```
+~/code/oldwired/
+├── fv-go/      # checkout of github.com/oldwired/fv-go
+└── fvmux/      # this repo
+```
+
+```go
+// fvmux/go.work — local only, never committed (see .gitignore)
+go 1.25.8
+
+use (
+    .
+    ../fv-go
+)
+```
+
+CI doesn't see `go.work`, so it builds against whatever's pinned in
+`go.mod`. To flow fv-go changes back into fvmux's pin: commit + push
+fv-go, then `go get github.com/oldwired/fv-go@main` here to bump the
+pseudo-version.
+
 ### Detach + reattach via tmux
 
 fvmux v1 is a foreground process. To get tmux-style detach/reattach
 without learning or configuring tmux, install the glue:
 
-```sh
-make install-glue   # → ~/.local/bin/fvmuxa
-                    #   ~/.config/fvmux/fvmux.tmux.conf
-```
+- **Easiest:** on first run, the wizard offers to install it for you
+  (or use **Help → Reset First-Run Wizard** any time and accept the
+  prompt). Drops `fvmuxa` into `~/.local/bin` and `fvmux.tmux.conf`
+  into `~/.config/fvmux/`. On Windows it also installs `fvmuxa.cmd`,
+  which calls `tmux.exe` directly (no bash needed).
+- **From a source checkout:** `make install-glue` does the same
+  non-interactively. Files come from `internal/glue/`, which is also
+  what the binary embeds.
+
+The wizard skips its prompt when the files are already in place, and
+won't clobber a hand-edited `fvmux.tmux.conf` on a reinstall.
 
 Then:
 
@@ -597,7 +644,9 @@ selection.
 
 fv-go is the framework — everything fvmux draws goes through
 `pkg/fv/views` and `pkg/fv/widgets`. fvmux does not vendor or fork
-fv-go; the `replace` directive in `go.mod` points at `../fv-go`.
+fv-go; `go.mod` pins an upstream pseudo-version, and a local
+(gitignored) `go.work` is the mechanism for dual-repo dev — see
+[Hacking on both fvmux and fv-go](#hacking-on-both-fvmux-and-fv-go).
 
 ---
 
@@ -628,12 +677,16 @@ For a real SSH/SFTP smoke test there's a docker-compose at
 
 ### CI
 
-`.github/workflows/ci.yml` runs build + test + race + cross-compile on
-PR and main. `.github/workflows/release.yml` triggers on tag push,
-strips the local `replace github.com/oldwired/fv-go => ../fv-go` from
-`go.mod`, runs `go mod tidy`, and builds binaries for
-linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
-to attach to the GitHub release.
+`.github/workflows/ci.yml` runs gofmt + vet + test + race + lint +
+govulncheck + cross-compile on PR and `main`.
+
+`.github/workflows/release.yml` triggers on `v*` tag push. It re-runs
+the same verify steps as the gate, builds binaries for linux/amd64,
+linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, generates an
+SPDX SBOM via syft, then assembles a release with binaries + LICENSE
++ `fvmux.spdx.json` + `checksums.txt`. CI never sees `go.work` (it's
+gitignored), so it always builds against the pseudo-version pinned in
+`go.mod`.
 
 ### Working alongside fv-go
 
@@ -642,9 +695,10 @@ call it out** — don't patch around it in fvmux. CLAUDE.md (the
 AI-pairing guidance) and the implementation plan both describe this
 discipline.
 
-The `replace` directive must be present during dual-repo dev. CI's
-release workflow strips it automatically before publishing release
-binaries.
+When fv-go changes need to flow into fvmux: commit + push fv-go, then
+`go get github.com/oldwired/fv-go@main` here to bump the pseudo-version
+in `go.mod`. The local `go.work` keeps your in-progress fv-go edits
+visible to fvmux in the meantime.
 
 ---
 

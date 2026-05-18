@@ -122,6 +122,9 @@ const (
 	CmdLayoutMainV uint16 = 1113
 	CmdLayoutTiled uint16 = 1114
 
+	// 1115 — about / credits.
+	CmdAbout uint16 = 1115 // Help → About fvmux…
+
 	// 1090s — window list / find
 	CmdWindowList uint16 = 1090 // Ctrl-G w
 	CmdFindWindow uint16 = 1091 // Ctrl-G f
