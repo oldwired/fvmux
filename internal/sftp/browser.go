@@ -25,8 +25,9 @@ const (
 // reserved fv-go range so they don't clash with CmOK/CmCancel/etc.;
 // keyHandler intercepts them via OfPreProcess and routes to actions.
 const (
-	cmSftpCopy   uint16 = 0xF010
-	cmSftpCancel uint16 = 0xF011
+	cmSftpCopy    uint16 = 0xF010
+	cmSftpCancel  uint16 = 0xF011
+	cmSftpRefresh uint16 = 0xF012
 )
 
 // liveMgrs tracks every browser's transfer manager so the global
@@ -241,7 +242,14 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	tp := taskprogress.New(geom.NewRect(2, tpY0, w-2, tpY1))
 	tp.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY | consts.GfGrowHiX
 	d.Insert(tp)
-	tt := &transferTicker{m: mgr, tp: tp, ok: true}
+	tt := &transferTicker{
+		m:      mgr,
+		tp:     tp,
+		remote: remote,
+		local:  local,
+		seen:   make(map[*Transfer]int32),
+		ok:     true,
+	}
 	anim.Register(tt, 200*time.Millisecond)
 
 	// Hotkey handler — Enter for cd, F5/Del for transfers, CmCancel
@@ -252,7 +260,7 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	d.Insert(keys)
 
 	// Bottom row: navigation hints (Tab / Enter / Esc are behaviors,
-	// not commands — they stay as text) on the left; three action
+	// not commands — they stay as text) on the left; four action
 	// buttons packed flush to the right edge with 4-cell gaps so the
 	// shadow column of each button (which extends one cell past the
 	// button's right edge) doesn't run into the next button.
@@ -262,16 +270,27 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	cancelX0 := cancelX1 - 14
 	copyX1 := cancelX0 - 4
 	copyX0 := copyX1 - 10
-	hintX1 := copyX0 - 4
+	refreshX1 := copyX0 - 4
+	refreshX0 := refreshX1 - 11
+	hintX1 := refreshX0 - 4
 
 	hint := dialogs.NewStaticText(
 		geom.NewRect(2, h-3, hintX1, h-2),
-		"Tab switch  ·  Enter open  ·  Esc close",
+		"F5 cp · F6 ren · F7 mkdir · F8 del · Ctrl-R refresh",
 	)
-	// Hint sticks to the bottom row (Y slides with parent) but
-	// stays anchored at the left edge (no X grow).
-	hint.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY
+	// Hint sticks to the bottom row (Y slides with parent) and
+	// stretches horizontally so the full F-key cheat actually
+	// becomes visible on wider terminals — without GfGrowHiX it
+	// clips at construction width forever.
+	hint.GrowMode = consts.GfGrowLoY | consts.GfGrowHiY | consts.GfGrowHiX
 	d.Insert(hint)
+
+	refreshBtn := dialogs.NewButton(
+		geom.NewRect(refreshX0, h-3, refreshX1, h-2),
+		"~R~efresh", cmSftpRefresh, 0,
+	)
+	refreshBtn.GrowMode = consts.GfGrowAll
+	d.Insert(refreshBtn)
 
 	copyBtn := dialogs.NewButton(
 		geom.NewRect(copyX0, h-3, copyX1, h-2),
@@ -390,16 +409,57 @@ func (p *previewPane) swap(next views.View) {
 
 // transferTicker is registered with the anim loop while the browser
 // is open; its Tick rebuilds the TaskProgress widget's task list from
-// the Manager's atomic-counter snapshot.
+// the Manager's atomic-counter snapshot. It also watches for transfers
+// transitioning from Active to Done and refreshes the destination
+// panel's listing so the freshly-copied file shows up without the user
+// having to navigate away and back.
 type transferTicker struct {
-	m  *Manager
-	tp *taskprogress.TaskProgress
-	ok bool
+	m      *Manager
+	tp     *taskprogress.TaskProgress
+	remote *panel
+	local  *panel
+	seen   map[*Transfer]int32 // last-observed status per transfer.
+	ok     bool
 }
 
 func (t *transferTicker) Tick(now time.Time) bool {
 	if !t.ok {
 		return false
+	}
+	snap := t.m.Snapshot()
+	for _, x := range snap {
+		st := x.Status()
+		prev, had := t.seen[x]
+		t.seen[x] = st
+		if !had {
+			continue
+		}
+		if prev != StatusActive || st != StatusDone {
+			continue
+		}
+		// Active → Done: refresh the destination side. Uploads
+		// land on the remote, downloads on the local FS.
+		switch x.Direction {
+		case Upload:
+			if t.remote != nil {
+				t.remote.refresh()
+			}
+		case Download:
+			if t.local != nil {
+				t.local.refresh()
+			}
+		}
+	}
+	// Drop entries whose transfers were cleared (ClearCompleted) so
+	// the map doesn't grow unbounded over a long-lived browser.
+	if len(t.seen) > len(snap) {
+		alive := make(map[*Transfer]int32, len(snap))
+		for _, x := range snap {
+			if st, ok := t.seen[x]; ok {
+				alive[x] = st
+			}
+		}
+		t.seen = alive
 	}
 	t.m.SyncWidget(t.tp)
 	return true

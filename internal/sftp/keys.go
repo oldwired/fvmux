@@ -16,14 +16,17 @@ import (
 // keyHandler is an invisible OfPreProcess view installed inside the
 // browser dialog. It intercepts:
 //
-//   - Enter        — when focus is in a listing, dive into a folder /
+//   - Enter   — when focus is in a listing, dive into a folder /
 //     parent row. The listing's TreeView would otherwise
 //     try to toggle children (no-op for leaf-only
 //     listings, but consuming the event keeps it tidy).
-//   - F5 / F6      — copy the focused listing's highlighted file to
-//     the other side's cwd. Direction is derived from
-//     which side has focus.
-//   - Del          — cancel the most recent in-flight transfer.
+//   - F5      — copy the focused listing's highlighted file to the
+//     other side's cwd. Direction is derived from focus.
+//   - F6      — rename the focused listing's selection.
+//   - F7      — make a new directory inside the focused side's cwd.
+//   - F8      — delete (recursively) the focused listing's selection.
+//   - Ctrl-R  — refresh both panels' listings.
+//   - Del     — cancel the most recent in-flight transfer.
 //
 // Tab cycling between the four selectable views (remote tree, remote
 // listing, local tree, local listing) is handled by fv-go's standard
@@ -69,6 +72,9 @@ func (h *keyHandler) HandleEvent(ev *drivers.Event) {
 		case cmSftpCancel:
 			h.mgr.CancelLast()
 			ev.What = consts.EvNothing
+		case cmSftpRefresh:
+			h.refreshBoth()
+			ev.What = consts.EvNothing
 		case consts.CmCancel:
 			// Dialog's own EndModal is a no-op for non-modal — close
 			// the dialog ourselves. OnClose then runs the teardown.
@@ -94,10 +100,69 @@ func (h *keyHandler) HandleEvent(ev *drivers.Event) {
 	case consts.KbF5:
 		h.copyAcross()
 		ev.What = consts.EvNothing
+	case consts.KbF6:
+		h.renameSelected()
+		ev.What = consts.EvNothing
+	case consts.KbF7:
+		h.makeDir()
+		ev.What = consts.EvNothing
+	case consts.KbF8:
+		h.deleteSelected()
+		ev.What = consts.EvNothing
+	case consts.KbCtrlR:
+		h.refreshBoth()
+		ev.What = consts.EvNothing
 	case consts.KbDel:
 		if h.mgr.CancelLast() {
 			ev.What = consts.EvNothing
 		}
+	}
+}
+
+// makeDir, renameSelected, deleteSelected are the thin keyHandler
+// wrappers around the action funcs in actions.go. They use a strict
+// focus check — F7 only requires *some* panel focus (mkdir doesn't
+// care which row is highlighted), F6/F8 also require listing focus
+// (rename/delete need a row).
+func (h *keyHandler) makeDir() {
+	p, _ := h.strictFocusedPanel()
+	mkdirAction(h.app, p)
+}
+
+func (h *keyHandler) renameSelected() {
+	p, listingFocused := h.strictFocusedPanel()
+	renameAction(h.app, p, listingFocused)
+}
+
+func (h *keyHandler) deleteSelected() {
+	p, listingFocused := h.strictFocusedPanel()
+	deleteAction(h.app, p, listingFocused)
+}
+
+// strictFocusedPanel returns the panel whose tree OR listing currently
+// holds focus, plus a flag for whether the listing was focused.
+// Unlike focusedSide (used by copy), this returns (nil, false) when
+// focus is on a button / hint instead of falling back to the remote
+// side — mutating actions should never silently default.
+func (h *keyHandler) strictFocusedPanel() (*panel, bool) {
+	switch {
+	case h.remote != nil && (h.remote.listingFocused() || h.remote.treeFocused()):
+		return h.remote, h.remote.listingFocused()
+	case h.local != nil && (h.local.listingFocused() || h.local.treeFocused()):
+		return h.local, h.local.listingFocused()
+	}
+	return nil, false
+}
+
+// refreshBoth re-reads both panels' current folders. Bound to the
+// Refresh button and Ctrl-R; the post-transfer auto-refresh only
+// refreshes the destination side (driven from transferTicker).
+func (h *keyHandler) refreshBoth() {
+	if h.remote != nil {
+		h.remote.refresh()
+	}
+	if h.local != nil {
+		h.local.refresh()
 	}
 }
 

@@ -94,6 +94,22 @@ func (p *panel) setCwd(newCwd string) {
 	views.MarkDirty()
 }
 
+// refresh re-reads the panel's current folder and rebuilds the listing
+// in place. Called after a transfer completes against this side, and
+// from the manual Refresh button / Ctrl-R hotkey. Header/cwd are
+// unchanged; tree expansion state is preserved.
+func (p *panel) refresh() {
+	if p.listing == nil {
+		return
+	}
+	if p.isRemote {
+		p.listing.SetRoots(buildRemoteListing(p.c, p.cwd))
+	} else {
+		p.listing.SetRoots(buildLocalListing(p.cwd))
+	}
+	views.MarkDirty()
+}
+
 // onTreeSelect: highlighting a folder in the tree snaps the listing
 // to that folder's contents.
 func (p *panel) onTreeSelect(n *treeview.Node) {
