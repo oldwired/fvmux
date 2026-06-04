@@ -94,6 +94,16 @@ func errorPreview(bounds geom.Rect, msg string) views.View {
 	return mv
 }
 
+// loadingPreview is the transient placeholder shown while a remote file
+// is read on a background goroutine (see previewPane.show). It gives the
+// user immediate feedback that Enter registered instead of a frozen,
+// stale preview pane during the network round-trip.
+func loadingPreview(bounds geom.Rect, path string) views.View {
+	mv := markdown.New(bounds, nil)
+	mv.SetMarkdown("# Loading…\n\n```\n" + path + "\n```")
+	return mv
+}
+
 // BuildLocalPreview is the local-FS counterpart to BuildPreview. Reads
 // from os.Open instead of the SFTP client; same classification rules
 // and fallback chain.

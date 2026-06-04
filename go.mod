@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/kevinburke/ssh_config v1.6.0
-	github.com/oldwired/fv-go v0.4.1
+	github.com/oldwired/fv-go v0.4.3
 	github.com/pkg/sftp v1.13.10
 	github.com/shirou/gopsutil/v4 v4.26.4
 	golang.org/x/sys v0.44.0

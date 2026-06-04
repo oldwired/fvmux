@@ -236,6 +236,8 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	pp := newPreviewPane(d, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
 	pp.growMode = consts.GfGrowHiX | consts.GfGrowHiY
 	pp.applyGrowMode()
+	pp.closed = &browserClosed // shared with the panels' refresh guards.
+	pp.refreshWG = &refreshWG
 	remote.preview = pp
 	local.preview = pp
 
@@ -350,11 +352,21 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 
 	// Non-modal: insert into the desktop and return immediately. The
 	// browser stays up as a regular floating dialog the user can drag,
-	// switch focus away from, or close at will. MakeFirst raises it
-	// to the top of the z-order AND gives it focus — Insert alone
-	// only focuses when no other window already holds it.
+	// switch focus away from, or close at will.
+	//
+	// Insert appends d as the new last (topmost) child, so the z-order is
+	// already right. MakeFirst would normally also focus it, but it
+	// early-returns when the view is already the last child — which Insert
+	// just made it — so on its own it leaves keyboard focus on whichever
+	// Window held it. That's the bug behind "the SFTP browser opens behind
+	// the ssh pane I just typed my passphrase into": the auth-then-retry
+	// path spawns an ssh window (which takes focus), and MakeFirst can't
+	// move it. Focus(d) takes keyboard focus unconditionally, so the
+	// freshly-spawned browser is ready for input no matter what was
+	// focused before.
 	a.Desktop.Insert(d)
-	a.Desktop.MakeFirst(d)
+	a.Desktop.MakeFirst(d) // raise z-order (no-op when d is already last).
+	a.Desktop.Focus(d)     // …and actually take keyboard focus.
 	return nil
 }
 
@@ -367,6 +379,19 @@ type previewPane struct {
 	bounds   geom.Rect
 	current  views.View
 	growMode byte
+
+	// Async remote-preview coordination (shared with the owning browser,
+	// same role as the panel fields). closed stops new reads once the
+	// browser is tearing down; refreshWG gates client.Close until an
+	// in-flight remote read has drained. gen is bumped on every show*
+	// call so a slow remote load whose file the user has already
+	// navigated away from is dropped instead of clobbering the newer
+	// preview. All three are touched only on the UI goroutine except the
+	// refreshWG counter, which is Add()ed on the UI goroutine before the
+	// read goroutine starts and Done()ed by that goroutine.
+	closed    *atomic.Bool
+	refreshWG *sync.WaitGroup
+	gen       uint64
 }
 
 func newPreviewPane(d *dialogs.Dialog, c *pkgsftp.Client, bounds geom.Rect) *previewPane {
@@ -400,16 +425,51 @@ func (p *previewPane) refreshBounds() {
 	}
 }
 
+// show previews a remote file. The remote open + read + image decode
+// run on a background goroutine so a large file over a slow link can't
+// freeze the whole browser (and with it the UI thread that drives every
+// repaint). A "Loading…" placeholder swaps in immediately; the real
+// widget replaces it when the read finishes. Results are dropped if the
+// browser closed or the user previewed something else in the meantime.
 func (p *previewPane) show(path string) {
 	p.refreshBounds()
-	next := BuildPreview(p.c, path, p.bounds)
-	p.swap(next)
+	if p.closed != nil && p.closed.Load() {
+		return
+	}
+	p.gen++
+	myGen := p.gen
+	bounds := p.bounds
+	c := p.c
+	p.swap(loadingPreview(bounds, path))
+
+	if p.refreshWG != nil {
+		p.refreshWG.Add(1) // gates the browser's client.Close on teardown.
+	}
+	go func() {
+		if p.refreshWG != nil {
+			defer p.refreshWG.Done()
+		}
+		next := BuildPreview(c, path, bounds) // network read, off the UI goroutine.
+		views.CallSoon(func() {
+			if p.closed != nil && p.closed.Load() {
+				return // browser tore down while the read was in flight.
+			}
+			if myGen != p.gen {
+				return // user previewed another file meanwhile.
+			}
+			p.swap(next)
+		})
+	}()
 }
 
-// showLocal is show() for local-FS paths — reads via os.Open instead
-// of the SFTP client.
+// showLocal is show() for local-FS paths — reads via os.Open instead of
+// the SFTP client. Local reads don't block meaningfully, so this stays
+// synchronous; it still bumps gen so a slower remote load already in
+// flight (e.g. the user previewed a remote file, then a local one)
+// drops its stale result instead of clobbering this preview.
 func (p *previewPane) showLocal(path string) {
 	p.refreshBounds()
+	p.gen++
 	next := BuildLocalPreview(path, p.bounds)
 	p.swap(next)
 }
@@ -447,13 +507,23 @@ func (t *transferTicker) Tick(now time.Time) bool {
 		return false
 	}
 	snap := t.m.Snapshot()
+	changed := false // a transfer appeared, vanished, or changed status.
+	active := false  // ≥1 transfer still running (progress bar animates).
 	for _, x := range snap {
 		st := x.Status()
 		prev, had := t.seen[x]
 		t.seen[x] = st
+		if st == StatusActive {
+			active = true
+		}
 		if !had {
+			changed = true // newly observed transfer.
 			continue
 		}
+		if prev == st {
+			continue
+		}
+		changed = true
 		if prev != StatusActive || st != StatusDone {
 			continue
 		}
@@ -473,6 +543,7 @@ func (t *transferTicker) Tick(now time.Time) bool {
 	// Drop entries whose transfers were cleared (ClearCompleted) so
 	// the map doesn't grow unbounded over a long-lived browser.
 	if len(t.seen) > len(snap) {
+		changed = true
 		alive := make(map[*Transfer]int32, len(snap))
 		for _, x := range snap {
 			if st, ok := t.seen[x]; ok {
@@ -480,6 +551,16 @@ func (t *transferTicker) Tick(now time.Time) bool {
 			}
 		}
 		t.seen = alive
+	}
+	// Only rebuild the widget and ask the program loop to repaint when a
+	// transfer is actually moving or just changed state. On idle ticks
+	// (no transfers, or all settled) we return false so the loop stays
+	// quiescent — a forced repaint re-emits any on-screen SIXEL image
+	// preview in this same browser, and at 5 Hz that reads as a flickering
+	// image with the cursor darting around. Returning false here is what
+	// keeps a still image preview still.
+	if !changed && !active {
+		return false
 	}
 	t.m.SyncWidget(t.tp)
 	return true
