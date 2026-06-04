@@ -280,9 +280,13 @@ Even-V, Main-H, Main-V, Tiled).
 
 Inside the SFTP browser:
 - **Tab** switches focus between remote (top) and local (bottom) trees.
-- **F5 / F6** copy the focused tree's current file to the other panel's cwd.
-- **Del** cancels the most recent in-flight transfer (cooperatively, at
-  the next chunk boundary).
+- **F5** copies the focused listing's selection (file *or* folder,
+  recursively) to the other panel's cwd.
+- **F6** moves/renames the selection: a bare name renames it in place;
+  a path moves it to the other side (copy, then delete the source once
+  the copy fully succeeds).
+- **Del** cancels the most recent in-flight transfer (single files
+  hard-abort immediately; folder-copy files cancel at the next chunk).
 - **Esc** closes the browser.
 
 ### Meta
@@ -460,9 +464,12 @@ template is seeded at
 `~/.config/fvmux/themes/example.toml.disabled` — rename to a `.toml`
 extension to activate.
 
-Every overlay field is optional; missing fields inherit fv-go's
-default palette. Values are uint16 attributes (low byte = fg, high
-byte = bg):
+Any field of fv-go's `theme.Palette` is overridable — use the
+`snake_case` form of the field name (`frame_active`,
+`menu_box_selected_hot`, `tree_focused`, …). Every field is optional;
+missing fields inherit fv-go's default palette, and an unknown key is
+reported as an error (so a typo doesn't silently no-op). Values are
+uint16 attributes (low byte = fg, high byte = bg):
 
 ```toml
 name = "indigo"
@@ -542,14 +549,23 @@ Key map inside the browser:
 
 - **Tab** — cycle focus across the four panes (remote tree → remote
   listing → local tree → local listing → …).
-- **F5 / F6** — copy the file highlighted in the focused listing to
-  the other side's current folder. Direction is derived from which
-  side has focus. If the destination already exists you're asked to
-  confirm before it's overwritten.
-- **Del** — cancel the most recent in-flight transfer. Cancellation is
-  cooperative: it takes effect at the next chunk boundary, so a
-  transfer wedged on a stalled link only aborts once the link errors
-  out (or the browser closes, which tears the connection down).
+- **F5** — copy the selection highlighted in the focused listing to
+  the other side's current folder. Files copy as a single transfer;
+  folders copy recursively (one transfer per file, directory skeleton
+  recreated first). Direction is derived from which side has focus. If
+  the destination already exists you're asked to confirm before it's
+  overwritten (or merged, for a folder).
+- **F6** — move/rename the selection. The prompt is pre-filled with the
+  other panel's path, so the default moves it across; type a **bare
+  name** to rename in place instead. A same-side rename is instant; a
+  cross-side move copies then deletes the source once the copy has
+  fully succeeded (so the data is never lost mid-move).
+- **Del** — cancel the most recent in-flight transfer. A single-file
+  transfer is hard-aborted: it runs on its own ssh session, so cancel
+  closes that session and unblocks it immediately even on a dead link.
+  The per-file transfers of a recursive folder copy share the browser
+  session and cancel cooperatively (at the next chunk boundary, or when
+  the link errors / the browser closes).
 - **Esc / Close** — dismiss the browser.
 
 Transfers run as goroutines updating an atomic byte counter; the
@@ -735,20 +751,16 @@ visible to fvmux in the meantime.
 
 What's still rough in v1 alpha — none block daily use:
 
-- **Move semantics** in the SFTP browser. F5/F6 always copy; there
-  is no rename / move primitive yet. Directory copy isn't supported
-  either (file-at-a-time only).
-- **Cancelling a network-stalled transfer** isn't instant: cancel is
-  cooperative (checked per chunk), so a transfer hung on a dead link
-  only aborts when the link errors out or the browser closes. A
-  per-transfer hard abort would need a dedicated ssh channel per
-  transfer.
-- **Image preview** uses Go's `image.Decode` with PNG/JPG/GIF support
-  via blank imports. WebP / TIFF / BMP would need additional
-  decoders; for now they fall back to hex.
-- **Themes from TOML** support a curated subset of `fvtheme.Palette`
-  fields (frame / window / splitter / desktop / status / menu).
-  Adding more is one edit in `internal/theme/load.go`.
+- **Cancelling a folder transfer isn't instant.** Single-file F5/F6
+  transfers run on their own ssh session, so **Del** hard-aborts one
+  even when it's wedged on a dead link (closing the session unblocks the
+  read/write). The per-file transfers of a *recursive folder* copy share
+  the browser's session and stay cooperative (cancel lands at the next
+  chunk boundary, or when the link errors / the browser closes) — giving
+  each file its own ssh subprocess would mean one subprocess per file.
+- **Image preview** decodes PNG / JPG / GIF / WebP / BMP / TIFF via
+  `image.Decode` blank imports. Anything else (and images over 8 MiB)
+  falls back to the hex view.
 - **Ctrl-Shift-P** as a standalone palette chord isn't wired — would
   need a non-prefix dispatch path. `Ctrl-G P` is the only way in.
 

@@ -1,5 +1,6 @@
 // Mutating actions for the SFTP browser following the Norton /
-// Midnight Commander convention: F6 rename, F7 mkdir, F8 delete.
+// Midnight Commander convention: F6 move/rename (see move.go), F7
+// mkdir, F8 delete.
 // Each action determines the target side from focus, prompts the user
 // (input dialog for names, YesNo for delete), runs the local-FS or
 // SFTP call, and refreshes the affected panel's listing.
@@ -31,9 +32,9 @@ func joinRemote(cwd, name string) string {
 }
 
 // validateBasename returns a non-nil error if name is empty, only
-// whitespace, or contains a path separator. Used by mkdir + rename to
-// keep the user inside the panel's current directory — moving across
-// directories is what F5 copy + F8 delete are for.
+// whitespace, or contains a path separator. Used by mkdir and by F6's
+// in-place rename to keep a bare name inside the panel's current
+// directory — a path entry in the F6 dialog is a cross-host move instead.
 func validateBasename(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("name cannot be empty")
@@ -117,55 +118,6 @@ func mkdirAction(a *fvapp.Application, p *panel) {
 	if err != nil {
 		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
 			"mkdir failed: %s", []any{err.Error()}, msgbox.OKOnly)
-		return
-	}
-	p.refresh()
-}
-
-// renameAction (F6) renames the listing's current selection. Requires
-// listing focus (rename of a tree-highlighted folder would be the same
-// operation in principle, but the listing is where the file the user
-// is looking at lives, so we keep the gesture simple and predictable).
-// The new name must be a plain basename — moving across directories
-// is what F5 copy is for.
-func renameAction(a *fvapp.Application, p *panel, listingFocused bool) {
-	if p == nil || !listingFocused {
-		msgbox.Show(&a.Desktop.Group, msgbox.Info,
-			"Highlight a file or folder in a listing to rename.",
-			msgbox.OKOnly)
-		return
-	}
-	e := currentListingEntry(p)
-	if e == nil {
-		return
-	}
-	if e.Parent {
-		msgbox.Show(&a.Desktop.Group, msgbox.Info,
-			"Can't rename the '../' row.", msgbox.OKOnly)
-		return
-	}
-
-	oldName := filepath.Base(e.Path)
-	newName, ok := promptName(a, "Rename",
-		fmt.Sprintf("Rename %q to:", oldName), oldName)
-	if !ok || newName == oldName {
-		return
-	}
-	if err := validateBasename(newName); err != nil {
-		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
-			"%s.", []any{err.Error()}, msgbox.OKOnly)
-		return
-	}
-
-	var err error
-	if e.Local {
-		err = os.Rename(e.Path, filepath.Join(p.cwd, newName))
-	} else {
-		err = p.c.Rename(e.Path, joinRemote(p.cwd, newName))
-	}
-	if err != nil {
-		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
-			"rename failed: %s", []any{err.Error()}, msgbox.OKOnly)
 		return
 	}
 	p.refresh()

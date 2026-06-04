@@ -49,6 +49,17 @@ type Transfer struct {
 
 	cancel     chan struct{}
 	cancelOnce sync.Once
+
+	// done is closed by run after status reaches a terminal value. A
+	// move's group waiter (finishMove) blocks on it to learn when the
+	// copy finished, without polling.
+	done chan struct{}
+
+	// removeSource, when non-nil, marks this transfer as a move: run
+	// deletes the source after a successful copy. A delete failure fails
+	// the whole transfer (the copy already landed, so the data is safe;
+	// the source just survives and the error surfaces).
+	removeSource func() error
 }
 
 // requestCancel closes t.cancel exactly once across all callers. Safe
@@ -101,13 +112,43 @@ type Manager struct {
 	Alias   string
 	closeFn func()
 
+	// openDedicated, when set, opens a fresh SFTP session (its own ssh
+	// subprocess over the alias's ControlMaster) for a single-file
+	// transfer, so a hard cancel can close that session and abort an
+	// in-flight read/write immediately. nil ⇒ StartDedicated falls back
+	// to the shared client (cooperative cancel only).
+	openDedicated func() (dedicatedConn, error)
+
 	mu   sync.Mutex
 	list []*Transfer
-	wg   sync.WaitGroup // tracks live run goroutines.
+	wg   sync.WaitGroup // tracks live run + abort-watcher goroutines.
+}
+
+// dedicatedConn is the slice of *Client that StartDedicated needs: the
+// underlying pkg/sftp client to transfer over, plus a Close that tears
+// the session down (unblocking any read/write wedged on it). *Client
+// satisfies it; tests substitute an in-process fake.
+type dedicatedConn interface {
+	SFTP() *pkgsftp.Client
+	Close() error
 }
 
 // NewManager returns an empty transfer manager bound to alias.
 func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
+
+// EnableDedicatedTransfers wires StartDedicated to open a real per-transfer
+// ssh subprocess for the manager's alias, reusing controlPath's master.
+// The browser calls this after constructing the manager; tests inject
+// their own opener instead.
+func (m *Manager) EnableDedicatedTransfers(controlPath string) {
+	m.openDedicated = func() (dedicatedConn, error) {
+		c, err := Open(m.Alias, controlPath)
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+}
 
 // Wait blocks until every started transfer goroutine has finished. The
 // browser's close path calls this (off the UI thread) before closing the
@@ -124,6 +165,19 @@ func (m *Manager) SetCloseFn(fn func()) { m.closeFn = fn }
 // goroutine. The returned Transfer is the manager's tracking entry —
 // caller may stash it but doesn't need to.
 func (m *Manager) Start(c *pkgsftp.Client, dir Direction, localPath, remotePath string) (*Transfer, error) {
+	return m.enqueue(c, dir, localPath, remotePath, nil)
+}
+
+// StartMove is Start plus a move semantic: after the copy succeeds, run
+// invokes removeSource to delete the original. A removeSource error fails
+// the transfer (the copy already landed; the source is left in place).
+func (m *Manager) StartMove(c *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error) (*Transfer, error) {
+	return m.enqueue(c, dir, localPath, remotePath, removeSource)
+}
+
+// enqueue stats the source for its size, registers the transfer, and
+// launches its run goroutine. removeSource is nil for a plain copy.
+func (m *Manager) enqueue(c *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error) (*Transfer, error) {
 	var size int64
 	switch dir {
 	case Upload:
@@ -140,12 +194,14 @@ func (m *Manager) Start(c *pkgsftp.Client, dir Direction, localPath, remotePath 
 		size = fi.Size()
 	}
 	t := &Transfer{
-		Direction:  dir,
-		LocalPath:  localPath,
-		RemotePath: remotePath,
-		Size:       size,
-		StartedAt:  time.Now(),
-		cancel:     make(chan struct{}),
+		Direction:    dir,
+		LocalPath:    localPath,
+		RemotePath:   remotePath,
+		Size:         size,
+		StartedAt:    time.Now(),
+		cancel:       make(chan struct{}),
+		done:         make(chan struct{}),
+		removeSource: removeSource,
 	}
 	m.mu.Lock()
 	m.list = append(m.list, t)
@@ -154,6 +210,47 @@ func (m *Manager) Start(c *pkgsftp.Client, dir Direction, localPath, remotePath 
 	m.wg.Add(1) // paired with Done in run; before the goroutine starts.
 	go m.run(c, t)
 	return t, nil
+}
+
+// StartDedicated runs a single-file transfer (optionally a move, via
+// removeSource) on its own SFTP session so a cancel can hard-abort it:
+// closing that session unblocks a read/write wedged on a dead link
+// immediately, instead of waiting for the next cooperative chunk check.
+// Folder transfers deliberately stay on the shared client (StartTree) to
+// avoid one ssh subprocess per file. If no dedicated opener is configured
+// (or it fails), the transfer falls back to the shared client and remains
+// cooperative-cancel only.
+func (m *Manager) StartDedicated(shared *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error) (*Transfer, error) {
+	if m.openDedicated == nil {
+		return m.enqueue(shared, dir, localPath, remotePath, removeSource)
+	}
+	dc, err := m.openDedicated()
+	if err != nil || dc == nil {
+		return m.enqueue(shared, dir, localPath, remotePath, removeSource)
+	}
+	t, err := m.enqueue(dc.SFTP(), dir, localPath, remotePath, removeSource)
+	if err != nil {
+		_ = dc.Close()
+		return nil, err
+	}
+	m.wg.Add(1)
+	go m.abortWatcher(t, dc)
+	return t, nil
+}
+
+// abortWatcher closes the dedicated session as soon as the transfer is
+// cancelled (to unblock a wedged read/write), and in all cases reaps the
+// session once the transfer finishes. Close is idempotent, so the
+// cancel-then-finish path closing twice is harmless.
+func (m *Manager) abortWatcher(t *Transfer, dc dedicatedConn) {
+	defer m.wg.Done()
+	select {
+	case <-t.cancel:
+		_ = dc.Close() // hard-abort: unblock the in-flight op now.
+		<-t.done       // then wait for run to unwind.
+	case <-t.done:
+	}
+	_ = dc.Close() // reap the subprocess on normal completion.
 }
 
 // CancelLast aborts the most recent still-active transfer, if any.
@@ -273,7 +370,15 @@ func captionFor(t *Transfer) string {
 
 func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 	defer m.wg.Done()
+	if t.done != nil {
+		defer close(t.done)
+	}
 	err := m.copy(c, t)
+	// A move deletes the source only once the copy fully succeeded. A
+	// delete failure fails the move (copy already landed → data is safe).
+	if err == nil && t.removeSource != nil {
+		err = t.removeSource()
+	}
 	switch {
 	case err == nil:
 		t.bytes.Store(t.Size)

@@ -10,6 +10,13 @@ import (
 	"os"
 	"strings"
 
+	// Extra image decoders registered with image.Decode so the preview
+	// pane handles them instead of falling back to hex. All three are
+	// decode-only blank imports; webp in particular has no encoder.
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
+
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/hexedit"
@@ -28,7 +35,8 @@ const maxImageBytes = 8 * 1024 * 1024
 // right preview widget sized to bounds:
 //
 //   - .md / .markdown                  → MarkdownView (rendered).
-//   - recognized image (png/jpg/gif)   → ImageView (full decode, ≤ 8 MiB).
+//   - recognized image                 → ImageView (full decode, ≤ 8 MiB).
+//     (png/jpg/gif/webp/bmp/tiff)
 //   - binary / image-but-too-big       → HexEditor on first 64 KiB.
 //   - everything else                  → MarkdownView fenced as `text`.
 //

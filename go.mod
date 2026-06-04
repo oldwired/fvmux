@@ -9,6 +9,7 @@ require (
 	github.com/oldwired/fv-go v0.4.3
 	github.com/pkg/sftp v1.13.10
 	github.com/shirou/gopsutil/v4 v4.26.4
+	golang.org/x/image v0.41.0
 	golang.org/x/sys v0.44.0
 )
 
@@ -24,6 +25,5 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/term v0.43.0 // indirect
 )

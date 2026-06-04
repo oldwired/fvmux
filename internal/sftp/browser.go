@@ -112,9 +112,10 @@ func CloseAllBrowsers() {
 // row + Close button.
 //
 // Tab cycles focus across the four panes (fv-go's standard
-// selectable-view rotation). F5 / F6 copy the file highlighted in the
-// focused listing to the other side's cwd — direction is derived from
-// focus, so the same chord works both ways. Del cancels the most
+// selectable-view rotation). F5 copies the file or folder highlighted
+// in the focused listing to the other side's cwd; F6 moves/renames it
+// (see move.go) — direction is derived from focus, so the same chords
+// work both ways. Del cancels the most
 // recent in-flight transfer. Enter in a listing dives into a folder
 // (../ goes up); Enter on a file is a no-op (preview is already current).
 // Show returns nil on success (browser is now on the desktop) or an
@@ -246,6 +247,9 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	// lifetime and torn down from d.OnClose (set below).
 	mgr := NewManager(alias)
 	mgr.SetCloseFn(func() { d.Close() })
+	// Single-file F5/F6 transfers get their own ssh session off the same
+	// ControlMaster, so Del can hard-abort one wedged on a dead link.
+	mgr.EnableDedicatedTransfers(controlPath)
 	addLiveMgr(mgr)
 
 	// TaskProgress strip: stays anchored to its row band but slides
@@ -288,7 +292,7 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 
 	hint := dialogs.NewStaticText(
 		geom.NewRect(2, h-3, hintX1, h-2),
-		"F5 cp · F6 ren · F7 mkdir · F8 del · Ctrl-R refresh",
+		"F5 cp · F6 mv · F7 mkdir · F8 del · Ctrl-R refresh",
 	)
 	// Hint sticks to the bottom row (Y slides with parent) and
 	// stretches horizontally so the full F-key cheat actually
@@ -400,7 +404,8 @@ func newPreviewPane(d *dialogs.Dialog, c *pkgsftp.Client, bounds geom.Rect) *pre
 		"- **Tab** — switch between the four panes.\n" +
 		"- **Enter** on a folder — change into it.\n" +
 		"- **Enter** on a file — preview it here.\n" +
-		"- **F5** or the **Copy** button — copy the focused listing's selection to the other side.\n" +
+		"- **F5** or the **Copy** button — copy the focused listing's selection (file or folder) to the other side.\n" +
+		"- **F6** — move/rename: a bare name renames in place; a path moves it to the other side.\n" +
 		"- **Del** or **Cancel xfer** — cancel the newest in-flight transfer.\n" +
 		"- **Esc** or **Close** — dismiss this browser.")
 	d.Insert(mv)

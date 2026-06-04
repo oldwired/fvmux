@@ -33,7 +33,7 @@ func Sniff(name string, buf []byte) MediaKind {
 	switch ext {
 	case ".md", ".markdown":
 		return KindMarkdown
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif":
 		return KindImage
 	case ".txt", ".log", ".conf", ".cfg", ".ini", ".yaml", ".yml", ".json", ".xml",
 		".go", ".py", ".rs", ".c", ".cpp", ".h", ".hpp", ".ts", ".js", ".jsx", ".tsx",

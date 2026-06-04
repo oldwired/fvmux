@@ -48,6 +48,13 @@ func (m *Mux) registerWindow(w *views.Window, ws *windowState) {
 	m.windows[w.Self()] = ws
 	m.windowOrder = append(m.windowOrder, w.Self())
 	w.OnClose = func() { m.cleanupWindow(ws) }
+	// A mouse-drag resize stretches the body live through fv-go's GrowMode
+	// propagation, but it never rebuilds our tree — so Pane.LastRect (the
+	// click hit-map, refreshed only inside layout.Materialize) goes stale
+	// and clicks stop landing on the right pane. OnResize fires once when
+	// the drag ends; rerender there to resync the hit-map and re-apply the
+	// ratio-based split positions, matching the keyboard-resize path.
+	w.OnResize = func(geom.Point) { m.rerender(ws) }
 	m.App.Desktop.InsertWindow(w)
 	m.raiseMouseListener()
 }
@@ -136,6 +143,19 @@ func (m *Mux) childrenOrder() string {
 type mouseEvent = drivers.Event
 
 func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
+	// Any mouse-down on a window body makes fv-go raise that window to the
+	// top of the desktop's z-order (Window.HandleEvent → MakeFirst) and
+	// consume the event. That buries our topmost click-listener, so the
+	// NEXT click reaches the window first and never reaches us — focus
+	// would change exactly once and then freeze. The window's raise
+	// happens later in THIS same dispatch (it sits under us in z-order),
+	// so re-raising now would be undone immediately; schedule it for the
+	// next idle pass instead. drainCallbacks runs before the next event is
+	// handled, restoring the listener to the top in time for that click.
+	// raiseMouseListener is a no-op when already topmost, so this is cheap
+	// on clicks that didn't raise anything (empty desktop, same window).
+	defer views.CallSoon(m.raiseMouseListener)
+
 	ws := m.currentWindow()
 	if ws == nil {
 		if debug.Mouse() {

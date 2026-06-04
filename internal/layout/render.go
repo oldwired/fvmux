@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 
@@ -23,14 +24,31 @@ func Materialize(root *PaneNode, bounds geom.Rect, zoomed *session.PaneID) views
 	if root == nil {
 		return nil
 	}
+	var top views.View
 	if zoomed != nil {
 		if l := root.FindByID(*zoomed); l != nil && l.Pane != nil {
 			l.Pane.LastRect = bounds
 			detach(l.Pane.Term)
-			return l.Pane.Term
+			top = l.Pane.Term
 		}
 	}
-	return materializeView(root, bounds)
+	if top == nil {
+		top = materializeView(root, bounds)
+	}
+	if top != nil {
+		// The window inserts this view directly and, on a mouse-drag
+		// resize, stretches it through fv-go's GrowMode propagation (there
+		// is no rerender on the drag). Pin the interior top-left and grow
+		// only the bottom-right so the body fills the interior as the
+		// window changes size. A single Terminal pane already defaults to
+		// this mode, but NewSplitGroup defaults to GfGrowAll — which moves
+		// all four corners by the delta and so translates the whole split
+		// toward the bottom-right corner at constant size ("glued to the
+		// lower-right"). Override it here, where every creation/rerender
+		// path funnels through, so single and split bodies anchor alike.
+		top.BaseView().GrowMode = consts.GfGrowHiX | consts.GfGrowHiY
+	}
+	return top
 }
 
 func materializeView(n *PaneNode, bounds geom.Rect) views.View {
