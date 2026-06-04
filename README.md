@@ -217,7 +217,7 @@ auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheat
 | `Ctrl-G C` | New window from a profile |
 | `Ctrl-G s` | Open saved session… |
 | `Ctrl-G S` | Save current session |
-| `Ctrl-G $` | Rename current session file |
+| (menu) | Save Session As… (also covers rename-on-write) |
 | `Ctrl-G :` | Run command… (free-form `sh -c`, or `:tea` / `:rot13` / `:konami`) |
 | `Ctrl-G D` | Detach from tmux (when running inside fvmuxa) |
 | `Ctrl-G ,` | Rename current window (sticky user title) |
@@ -231,6 +231,11 @@ auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheat
 | `Ctrl-G w` / `f` | Window list / find window (fuzzy) |
 | `Ctrl-G q`       | Flash window numbers (1.5 s overlay) |
 | `Ctrl-G &`       | Kill the current window (confirms) |
+| `Ctrl-G g`       | Tile all windows in a grid (fills the desktop) |
+| `Ctrl-G G`       | Tile windows horizontally (full-width, stacked) |
+| `Ctrl-G v`       | Tile windows vertically (full-height, side-by-side) |
+| `Ctrl-G K`       | Cascade windows (diagonal offset, resized to 75%) |
+| (menu)           | Cascade (keep sizes) — Window menu, no resize |
 
 ### Pane layout
 | Chord | Action |
@@ -325,22 +330,26 @@ on first launch and seeds annotated templates.
 
 ```toml
 [general]
-prefix_key       = "C-g"        # set by the first-run wizard.
-default_profile  = "shell"
-confirm_kill     = true         # ask before killing live panes / quitting.
-splash_enabled   = true
-connect_split    = "vertical"   # how SSH connect splits the focused pane.
+prefix_key         = "C-g"      # set by the first-run wizard.
+default_profile    = "shell"
+confirm_kill       = true       # ask before killing live panes / quitting.
+splash_enabled     = true
+connect_split      = "vertical" # how SSH connect splits the focused pane.
+new_window_command = ""         # non-empty ⇒ Ctrl-G c runs this via `sh -c`
+                                # (e.g. "ssh prod-1"); empty ⇒ default_profile.
 
 [terminal]
 scrollback_lines = 10000
 shell            = ""           # empty ⇒ honour $SHELL.
 
 [appearance]
-theme            = "slate"
-bell             = "flash"      # off | flash | notify | both
-status_clock     = "15:04"
-window_shadow    = true
-palette_position = "center"     # center | top-left | top-center | top-right
+theme                 = "slate"
+bell                  = "flash"   # off | flash | notify | both
+status_clock          = "15:04"
+window_shadow         = true
+palette_position      = "center"  # center | top-left | top-center | top-right
+default_window_width  = 0         # initial new-window size; 0 ⇒ 80×24
+default_window_height = 0         # (profile window_width/height overrides this)
 
 [sftp]
 parallel         = 1
@@ -376,7 +385,7 @@ env     = { RUST_BACKTRACE = "1" }
 ```
 
 `cwd` understands `~` and `$VARS`. Per-profile fields also include
-`close_on_exit`, `window_w`, `window_h`, `scrollback_lines`.
+`close_on_exit`, `window_width`, `window_height`, `scrollback_lines`.
 
 ### `keybindings.toml`
 
@@ -653,10 +662,12 @@ internal/
 ├── logs/                  slog file sink + ring buffer for the log viewer.
 ├── sysmon/                CPU + RAM sampling (gopsutil) for the status bar.
 ├── whimsy/                Easter-egg predicates and filters.
-└── keys/                  Chord parser/canonicaliser (normalises keybindings.toml chords to the registry binding form).
+├── keys/                  Chord parser/canonicaliser (normalises keybindings.toml chords to the registry binding form).
+├── glue/                  Embedded fvmuxa wrapper + private tmux config (make install-glue).
+├── atomicfile/            Atomic write-then-rename helper for config / session / state files.
+└── debug/                 Opt-in file logging gated by FVMUX_DEBUG* env vars.
 
-assets/                    SIXEL splash + baked cheatsheet (go generate).
-scripts/                   fvmuxa wrapper + private tmux config.
+assets/                    Baked cheatsheet.md (go generate ./internal/cheatsheet).
 test/headless/             Unit + parity tests + golden snapshots.
 test/smoke/                Manual checklists + docker-compose for SFTP testing.
 .github/workflows/         CI (build/test/race/cross) + release (5 OS/arch combos).

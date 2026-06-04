@@ -130,7 +130,7 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdToggleStatusBar, Category: "View", Name: "Toggle Status Bar", MenuLabel: "Toggle ~S~tatus Bar"})
 	r.Register(&Command{ID: CmdToggleMenuBar, Category: "View", Name: "Toggle Menu Bar", MenuLabel: "Toggle ~M~enu Bar"})
 	r.Register(&Command{ID: CmdRedraw, Category: "View", Name: "Redraw", MenuLabel: "~R~edraw", Chord: "C-g r"})
-	r.Register(&Command{ID: CmdFlashNumbers, Category: "View", Name: "Flash Pane Numbers", MenuLabel: "Flash Pane ~N~umbers", Chord: "C-g q"})
+	r.Register(&Command{ID: CmdFlashNumbers, Category: "View", Name: "Flash Window Numbers", MenuLabel: "Flash Window ~N~umbers", Chord: "C-g q"})
 
 	// JoinFrom — opposite of BreakOut.
 	r.Register(&Command{ID: CmdJoinFrom, Category: "Pane", Name: "Join from Window…", MenuLabel: "~J~oin from Window…", Chord: "C-g @"})

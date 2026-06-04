@@ -6,9 +6,9 @@
 - Quit fvmux
 - `C-g C` — New Window from Profile
 - `C-g S` — Save Session
+- New Session
 - `C-g s` — Open Session…
 - Save Session As…
-- `C-g $` — Rename Session…
 - `C-g D` — Detach from tmux
 - `C-g :` — Run Command…
 - Edit config.toml
@@ -33,13 +33,14 @@
 - Toggle Status Bar
 - Toggle Menu Bar
 - `C-g r` — Redraw
-- `C-g q` — Flash Pane Numbers
+- `C-g q` — Flash Window Numbers
 - Layout: Even Horizontal
 - Layout: Even Vertical
 - Layout: Main Horizontal
 - Layout: Main Vertical
 - Layout: Tiled
 - `C-g T` — Theme…
+- Edit Themes…
 - `C-g Space` — Cycle Layout
 
 ## Pane
@@ -107,7 +108,8 @@
 - Reset First-Run Wizard…
 - Reload Config
 - `C-g L` — Log Viewer
+- About fvmux…
 
 ---
 
-*now with hex.*
+*a multiplexer for the rest of us.*
