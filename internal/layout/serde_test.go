@@ -28,7 +28,7 @@ func TestMarshalNestedSplit(t *testing.T) {
 	root = SplitV(root, leafB, c)
 
 	got := Marshal(root)
-	want := `split-v:0.500{leaf:profile=shell}{split-h:0.500{leaf:profile=shell}{leaf:profile=shell}}`
+	want := `split-v:0.5{leaf:profile=shell}{split-h:0.5{leaf:profile=shell}{leaf:profile=shell}}`
 	if got != want {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
@@ -38,8 +38,8 @@ func TestUnmarshalRoundtrip(t *testing.T) {
 	cases := []string{
 		`leaf:profile=shell`,
 		`leaf:profile=shell,title="zsh"`,
-		`split-v:0.500{leaf:profile=shell}{leaf:profile=shell}`,
-		`split-h:0.300{leaf:profile=shell,title="a"}{split-v:0.500{leaf:profile=shell}{leaf:profile=shell}}`,
+		`split-v:0.5{leaf:profile=shell}{leaf:profile=shell}`,
+		`split-h:0.3{leaf:profile=shell,title="a"}{split-v:0.5{leaf:profile=shell}{leaf:profile=shell}}`,
 	}
 	spawn := func(spec LeafSpec) (*session.Pane, error) {
 		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
@@ -53,6 +53,27 @@ func TestUnmarshalRoundtrip(t *testing.T) {
 		if round != src {
 			t.Errorf("round-trip mismatch:\nsrc  %s\nback %s", src, round)
 		}
+	}
+}
+
+// TestRatioRoundTripIsExact pins the precision fix: a ratio that doesn't
+// land on 3 decimals (e.g. a 2/3 drag-resize or even-preset chain) must
+// survive save→load unchanged. The old 'f',3 format quantised these.
+func TestRatioRoundTripIsExact(t *testing.T) {
+	a := &session.Pane{ID: session.NewPaneID(), Profile: "shell"}
+	b := &session.Pane{ID: session.NewPaneID(), Profile: "shell"}
+	root := SplitH(Leaf(a), Leaf(a), b)
+	root.Ratio = 2.0 / 3.0
+
+	spawn := func(spec LeafSpec) (*session.Pane, error) {
+		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
+	}
+	back, err := Unmarshal(Marshal(root), spawn)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back.Ratio != 2.0/3.0 {
+		t.Fatalf("ratio drifted: got %v want %v", back.Ratio, 2.0/3.0)
 	}
 }
 

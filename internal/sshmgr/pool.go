@@ -14,8 +14,10 @@
 package sshmgr
 
 import (
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -97,24 +99,53 @@ func (p *Pool) Release(alias string) {
 	}
 }
 
-// Snapshot lists every alias the pool has tracked. SockLive comes
-// from os.Stat on the socket file — true if the master is currently
-// up. Read-only.
+// Snapshot lists every alias the pool has tracked. SockLive reflects
+// whether a master is actually listening on the socket (not merely that
+// the socket file exists — a crashed master can leave a stale file
+// behind). Read-only.
 func (p *Pool) Snapshot() []ActiveConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make([]ActiveConn, 0, len(p.entries))
 	for _, e := range p.entries {
-		live := false
-		if _, err := os.Stat(e.sockPath); err == nil {
-			live = true
-		}
 		out = append(out, ActiveConn{
 			Alias: e.alias, Sock: e.sockPath,
-			Started: e.firstUse, Refs: e.refcount, SockLive: live,
+			Started: e.firstUse, Refs: e.refcount, SockLive: sockAlive(e.sockPath),
 		})
 	}
 	return out
+}
+
+// sockAlive reports whether a ControlMaster is currently listening on
+// sockPath. A bare connect+close is enough: a live master accepts it,
+// while a stale socket file (master gone) refuses the connection. This
+// avoids the false-positive of os.Stat, which only proves the file
+// exists.
+func sockAlive(sockPath string) bool {
+	c, err := net.DialTimeout("unix", sockPath, 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// SweepStale removes orphaned ControlMaster socket FILES left in dir by a
+// previously-crashed fvmux — but only those with no live master (a
+// connect is refused). Live sockets are left untouched: another fvmux
+// instance may be sharing them, and any genuinely-orphaned-but-alive
+// master self-terminates via ControlPersist. Called once at startup;
+// never kills a process, so it is safe under the multi-instance design.
+func SweepStale(dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.sock"))
+	if err != nil {
+		return
+	}
+	for _, sock := range matches {
+		if !sockAlive(sock) {
+			_ = os.Remove(sock)
+		}
+	}
 }
 
 // Shutdown asks every live master to exit cleanly via `ssh -O exit`.
@@ -136,5 +167,8 @@ func (p *Pool) Shutdown() {
 		_ = cmd.Run()
 		_ = os.Remove(e.sockPath)
 	}
-	p.entries = nil
+	// Reset to an empty (non-nil) map rather than nil: an in-flight poll
+	// goroutine racing shutdown may still Acquire, and assigning into a
+	// nil map panics.
+	p.entries = map[string]*entry{}
 }

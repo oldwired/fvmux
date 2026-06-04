@@ -36,6 +36,11 @@ func (m *Mux) respawnPane() {
 		return
 	}
 	m.wireTerminalCallbacks(newPane, ws.Frame)
+	// Release the dead pane's PTY before dropping the reference, so its
+	// file descriptors don't linger until GC.
+	if pane.Term != nil {
+		pane.Term.Stop()
+	}
 	ws.Focus.Pane = newPane
 	m.rerender(ws)
 }

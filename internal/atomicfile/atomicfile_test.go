@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
@@ -57,6 +58,57 @@ func TestWrite_LeavesNoTempOnSuccess(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf(".tmp should not exist after success; stat err = %v", err)
+	}
+}
+
+func TestWrite_LeavesNoUniqueTempOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := Write(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.toml" {
+			t.Fatalf("unexpected leftover after success: %q", e.Name())
+		}
+	}
+}
+
+func TestWrite_ConcurrentWritesNeverCorrupt(t *testing.T) {
+	// Two payloads of equal length; whichever wins the rename, the file
+	// must be exactly one of them — never a torn mix. The fixed-".tmp"
+	// design could publish a half-written temp; the unique-temp design
+	// cannot.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.toml")
+	a := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	b := []byte("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = Write(path, a, 0o600) }()
+		go func() { defer wg.Done(); _ = Write(path, b, 0o600) }()
+	}
+	wg.Wait()
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(a) && string(got) != string(b) {
+		t.Fatalf("torn write: got %q", got)
+	}
+	// No temp-* files left behind by the racing writers.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "state.toml" {
+			t.Fatalf("leftover temp after concurrent writes: %q", e.Name())
+		}
 	}
 }
 

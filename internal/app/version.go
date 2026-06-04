@@ -17,19 +17,26 @@ import (
 // Called from main.go after the wizard path doesn't run — keeping it
 // off the first-run path means new users aren't double-notified.
 func (m *Mux) MaybeShowVersionBump() {
-	state, _ := config.LoadState(m.Opts.Paths.StateFile())
-	if state.LastVersion == "" {
-		// First-run already handles this; just record the version.
+	var prev string
+	var notify bool
+	_ = config.WithStateLock(m.Opts.Paths.StateFile(), func() error {
+		state, _ := config.LoadState(m.Opts.Paths.StateFile())
+		if state.LastVersion == "" {
+			// First-run already handles this; just record the version.
+			state.LastVersion = m.Opts.Version
+			return config.SaveState(m.Opts.Paths.StateFile(), state)
+		}
+		if state.LastVersion == m.Opts.Version {
+			return nil
+		}
+		prev = state.LastVersion
+		notify = true
 		state.LastVersion = m.Opts.Version
-		_ = config.SaveState(m.Opts.Paths.StateFile(), state)
+		return config.SaveState(m.Opts.Paths.StateFile(), state)
+	})
+	if !notify {
 		return
 	}
-	if state.LastVersion == m.Opts.Version {
-		return
-	}
-	prev := state.LastVersion
-	state.LastVersion = m.Opts.Version
-	_ = config.SaveState(m.Opts.Paths.StateFile(), state)
 
 	body := fmt.Sprintf("Upgraded %s → %s\nCtrl-G ? opens the cheatsheet.",
 		prev, m.Opts.Version)

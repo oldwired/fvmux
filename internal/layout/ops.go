@@ -60,16 +60,24 @@ func Close(root, target *PaneNode) (*PaneNode, bool) {
 	grandparent := parent.Parent
 	sibling.Parent = grandparent
 
+	var newRoot *PaneNode
 	if grandparent == nil {
 		// parent was the root; sibling becomes the new root.
-		return sibling, false
-	}
-	if grandparent.A == parent {
-		grandparent.A = sibling
+		newRoot = sibling
 	} else {
-		grandparent.B = sibling
+		if grandparent.A == parent {
+			grandparent.A = sibling
+		} else {
+			grandparent.B = sibling
+		}
+		newRoot = root
 	}
-	return root, false
+	// Detach the removed nodes so any retained reference fails loudly
+	// (a nil deref or a CheckInvariants violation) rather than silently
+	// walking a half-collapsed subtree that's no longer in the live tree.
+	target.Parent = nil
+	parent.A, parent.B, parent.Parent = nil, nil, nil
+	return newRoot, false
 }
 
 // Swap exchanges the Panes at a and b without touching tree shape.

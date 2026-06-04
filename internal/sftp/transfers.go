@@ -7,6 +7,7 @@ package sftp
 import (
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,6 +18,12 @@ import (
 
 	pkgsftp "github.com/pkg/sftp"
 )
+
+// partSuffix names the temporary file a transfer writes into; on success
+// it is renamed over the real destination, so a failed/cancelled transfer
+// never leaves a truncated file masquerading as a complete one, and an
+// existing destination is only replaced once the copy fully succeeds.
+const partSuffix = ".part-fvmux"
 
 // Direction is the transfer direction.
 type Direction uint8
@@ -49,6 +56,18 @@ type Transfer struct {
 // cancellation, etc.).
 func (t *Transfer) requestCancel() {
 	t.cancelOnce.Do(func() { close(t.cancel) })
+}
+
+// cancelled reports whether cancellation has been requested. Used to
+// classify a transfer that errored out specifically because the client
+// was closed under it (browser teardown) as Cancelled rather than Failed.
+func (t *Transfer) cancelled() bool {
+	select {
+	case <-t.cancel:
+		return true
+	default:
+		return false
+	}
 }
 
 // Status values, stored as int32 in Transfer.status.
@@ -84,10 +103,18 @@ type Manager struct {
 
 	mu   sync.Mutex
 	list []*Transfer
+	wg   sync.WaitGroup // tracks live run goroutines.
 }
 
 // NewManager returns an empty transfer manager bound to alias.
 func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
+
+// Wait blocks until every started transfer goroutine has finished. The
+// browser's close path calls this (off the UI thread) before closing the
+// SFTP client, since pkg/sftp's Client is not safe to use concurrently
+// with Close — draining first guarantees no transfer is mid-Read/Write
+// when the client tears down.
+func (m *Manager) Wait() { m.wg.Wait() }
 
 // SetCloseFn lets the browser register its close action against the
 // manager so CloseAllBrowsers can dismiss it.
@@ -124,6 +151,7 @@ func (m *Manager) Start(c *pkgsftp.Client, dir Direction, localPath, remotePath 
 	m.list = append(m.list, t)
 	m.mu.Unlock()
 
+	m.wg.Add(1) // paired with Done in run; before the goroutine starts.
 	go m.run(c, t)
 	return t, nil
 }
@@ -195,15 +223,22 @@ func (m *Manager) SyncWidget(tp *taskprogress.TaskProgress) {
 	tp.Tasks = tp.Tasks[:0]
 	for _, t := range snap {
 		caption := captionFor(t)
-		size := t.Size
-		if size < 1 {
-			size = 1 // taskprogress needs Max > Min.
+		// taskprogress fields are int; halve both Max and Value until Max
+		// fits int32 so a >2 GiB transfer can't overflow to a negative bar
+		// on 32-bit builds. Display-only — the copy loop uses int64.
+		maxV, valV := t.Size, t.Bytes()
+		for maxV > math.MaxInt32 {
+			maxV >>= 1
+			valV >>= 1
+		}
+		if maxV < 1 {
+			maxV = 1 // taskprogress needs Max > Min.
 		}
 		task := &taskprogress.Task{
 			Caption:   caption,
 			Min:       0,
-			Max:       int(size),
-			Value:     int(t.Bytes()),
+			Max:       int(maxV),
+			Value:     int(valV),
 			StartedAt: t.StartedAt,
 		}
 		switch t.Status() {
@@ -237,12 +272,17 @@ func captionFor(t *Transfer) string {
 }
 
 func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
+	defer m.wg.Done()
 	err := m.copy(c, t)
 	switch {
 	case err == nil:
 		t.bytes.Store(t.Size)
 		t.status.Store(StatusDone)
-	case err == errCancelled:
+	case err == errCancelled || t.cancelled():
+		// errCancelled is the cooperative path; t.cancelled() catches a
+		// transfer killed by the client closing under it on teardown
+		// (which surfaces as a read/write error). Either way: Cancelled,
+		// not Failed.
 		t.status.Store(StatusCancelled)
 	default:
 		s := err.Error()
@@ -254,44 +294,82 @@ func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 var errCancelled = fmt.Errorf("cancelled")
 var errWriteStall = fmt.Errorf("destination write stalled (n=0 with no error)")
 
-func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) (retErr error) {
-	var src io.ReadCloser
-	var dst io.WriteCloser
-
+// copy streams the source into a temporary destination, then renames it
+// over the real destination on success. On any failure (including cancel)
+// the temporary is removed, so a partial transfer never leaves a
+// truncated file behind and an existing destination survives untouched.
+func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 	switch t.Direction {
 	case Upload:
 		lf, err := os.Open(t.LocalPath)
 		if err != nil {
 			return err
 		}
-		rf, err := c.Create(t.RemotePath)
+		defer func() { _ = lf.Close() }()
+		tmp := t.RemotePath + partSuffix
+		rf, err := c.Create(tmp)
 		if err != nil {
-			_ = lf.Close()
 			return err
 		}
-		src, dst = lf, rf
+		perr := pump(lf, rf, t)
+		// dst.Close flushes buffered SFTP writes; a silent error here
+		// would mean reporting success after losing data.
+		if cerr := rf.Close(); perr == nil {
+			perr = cerr
+		}
+		if perr != nil {
+			_ = c.Remove(tmp)
+			return perr
+		}
+		return remoteReplace(c, tmp, t.RemotePath)
 	case Download:
 		rf, err := c.Open(t.RemotePath)
 		if err != nil {
 			return err
 		}
-		lf, err := os.Create(t.LocalPath)
+		defer func() { _ = rf.Close() }()
+		tmp := t.LocalPath + partSuffix
+		lf, err := os.Create(tmp)
 		if err != nil {
-			_ = rf.Close()
 			return err
 		}
-		src, dst = rf, lf
-	}
-	defer func() { _ = src.Close() }()
-	// dst.Close may flush buffered writes (notably on SFTP uploads); a
-	// silent Close error here would mean the transfer reported success
-	// while data was lost. Promote it to retErr if nothing else failed.
-	defer func() {
-		if cerr := dst.Close(); cerr != nil && retErr == nil {
-			retErr = cerr
+		perr := pump(rf, lf, t)
+		if cerr := lf.Close(); perr == nil {
+			perr = cerr
 		}
-	}()
+		if perr != nil {
+			_ = os.Remove(tmp)
+			return perr
+		}
+		if err := os.Rename(tmp, t.LocalPath); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
+	return nil
+}
 
+// remoteReplace atomically replaces dest with tmp on the remote side.
+// Prefers the posix-rename extension (overwrites in one step); falls back
+// to remove-then-rename for servers that lack it.
+func remoteReplace(c *pkgsftp.Client, tmp, dest string) error {
+	if err := c.PosixRename(tmp, dest); err == nil {
+		return nil
+	}
+	_ = c.Remove(dest)
+	if err := c.Rename(tmp, dest); err != nil {
+		_ = c.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// pump is the cancel-aware copy loop. Cancellation is cooperative: the
+// channel is checked at each 64 KiB chunk boundary, so a transfer stalled
+// inside a single Read/Write only aborts once that syscall returns (or
+// the client is closed under it). Updates t.bytes as it goes.
+func pump(src io.Reader, dst io.Writer, t *Transfer) error {
 	buf := make([]byte, 64*1024)
 	for {
 		select {

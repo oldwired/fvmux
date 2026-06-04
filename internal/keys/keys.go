@@ -54,26 +54,35 @@ func Parse(s string) (Chord, error) {
 
 func parseStep(s string) (Step, error) {
 	var st Step
-	for {
-		switch {
-		case strings.HasPrefix(s, "C-"):
+	// Modifiers are a two-char "X-" prefix, accepted case-insensitively so
+	// "c-g" and "C-g" parse identically.
+	for len(s) >= 2 && s[1] == '-' {
+		switch s[0] {
+		case 'C', 'c':
 			st.Ctrl = true
-			s = s[2:]
-		case strings.HasPrefix(s, "S-"):
+		case 'S', 's':
 			st.Shift = true
-			s = s[2:]
-		case strings.HasPrefix(s, "A-"), strings.HasPrefix(s, "M-"):
+		case 'A', 'a', 'M', 'm':
 			st.Alt = true
-			s = s[2:]
 		default:
-			goto done
+			return finishStep(st, s)
 		}
+		s = s[2:]
 	}
-done:
-	if s == "" {
+	return finishStep(st, s)
+}
+
+func finishStep(st Step, atom string) (Step, error) {
+	if atom == "" {
 		return Step{}, errors.New("modifier without atom")
 	}
-	st.Atom = canonicalize(s)
+	st.Atom = canonicalize(atom)
+	// Ctrl+letter is case-insensitive at the terminal (Ctrl-G == Ctrl-g),
+	// so normalise to a single lowercase form. Letter case still matters
+	// for un-modified atoms ("C-g D" ≠ "C-g d").
+	if st.Ctrl && len(st.Atom) == 1 && st.Atom[0] >= 'A' && st.Atom[0] <= 'Z' {
+		st.Atom = strings.ToLower(st.Atom)
+	}
 	return st, nil
 }
 
@@ -112,8 +121,12 @@ func canonicalize(s string) string {
 	return s
 }
 
-// Format returns a canonical string form of c. Round-trips through
-// Parse for well-formed input.
+// Format returns the canonical string form of c — the exact form the
+// prefix dispatcher emits and that Command.Chord strings use, so a chord
+// formatted here compares equal to a registry binding. Special atoms are
+// rendered Title-case ("Tab", "Space"); single-character atoms keep their
+// case (chords are case-sensitive: "C-g D" ≠ "C-g d"). Round-trips
+// through Parse for well-formed input.
 func Format(c Chord) string {
 	parts := make([]string, len(c.Steps))
 	for i, s := range c.Steps {
@@ -127,8 +140,58 @@ func Format(c Chord) string {
 		if s.Shift {
 			sb.WriteString("S-")
 		}
-		sb.WriteString(s.Atom)
+		sb.WriteString(displayAtom(s.Atom))
 		parts[i] = sb.String()
 	}
 	return strings.Join(parts, " ")
+}
+
+// displayAtom maps a canonical (lowercase) special atom back to the
+// Title-case form used in chord strings. Non-special atoms (single
+// characters, digits, symbols) pass through untouched, preserving case.
+func displayAtom(atom string) string {
+	switch atom {
+	case "space":
+		return "Space"
+	case "enter":
+		return "Enter"
+	case "tab":
+		return "Tab"
+	case "esc":
+		return "Esc"
+	case "backspace":
+		return "Backspace"
+	case "delete":
+		return "Delete"
+	case "left":
+		return "Left"
+	case "right":
+		return "Right"
+	case "up":
+		return "Up"
+	case "down":
+		return "Down"
+	case "pgup":
+		return "PgUp"
+	case "pgdn":
+		return "PgDn"
+	case "home":
+		return "Home"
+	case "end":
+		return "End"
+	}
+	return atom
+}
+
+// Canonical normalises a chord string to the form Command.Chord and the
+// prefix dispatcher use, so user-authored bindings (e.g. "c-g tab") match
+// regardless of casing/spelling. Returns s unchanged if it can't be
+// parsed — a malformed binding simply won't match anything, which is
+// preferable to dropping it silently here.
+func Canonical(s string) string {
+	c, err := Parse(s)
+	if err != nil {
+		return s
+	}
+	return Format(c)
 }

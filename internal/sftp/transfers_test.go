@@ -1,9 +1,15 @@
 package sftp
 
 import (
+	"bytes"
+	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/oldwired/fv-go/pkg/fv/geom"
+	"github.com/oldwired/fv-go/pkg/fv/widgets/taskprogress"
 )
 
 // newActiveTransfer constructs a Transfer in the same shape Start
@@ -108,5 +114,113 @@ func TestCancelLast_NoActive(t *testing.T) {
 	m := NewManager("test-alias")
 	if m.CancelLast() {
 		t.Fatal("CancelLast on empty manager should return false")
+	}
+}
+
+func TestTransfer_Cancelled(t *testing.T) {
+	tr := newActiveTransfer()
+	if tr.cancelled() {
+		t.Fatal("fresh transfer should not report cancelled")
+	}
+	tr.requestCancel()
+	if !tr.cancelled() {
+		t.Fatal("transfer should report cancelled after requestCancel")
+	}
+}
+
+func TestManagerWait_ReturnsWithNoTransfers(t *testing.T) {
+	m := NewManager("a")
+	done := make(chan struct{})
+	go func() { m.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wait hung with no transfers")
+	}
+}
+
+func TestPump_CopiesAllBytesAndCountsThem(t *testing.T) {
+	tr := newActiveTransfer()
+	data := bytes.Repeat([]byte("xyz"), 100_000) // > one 64 KiB chunk
+	var dst bytes.Buffer
+	if err := pump(bytes.NewReader(data), &dst, tr); err != nil {
+		t.Fatalf("pump: %v", err)
+	}
+	if !bytes.Equal(dst.Bytes(), data) {
+		t.Fatal("pump did not copy bytes faithfully")
+	}
+	if tr.Bytes() != int64(len(data)) {
+		t.Fatalf("byte counter = %d, want %d", tr.Bytes(), len(data))
+	}
+}
+
+func TestPump_StopsOnCancel(t *testing.T) {
+	tr := newActiveTransfer()
+	tr.requestCancel() // cancelled before any chunk is processed.
+	var dst bytes.Buffer
+	if err := pump(bytes.NewReader(bytes.Repeat([]byte("a"), 1000)), &dst, tr); err != errCancelled {
+		t.Fatalf("pump err = %v, want errCancelled", err)
+	}
+	if dst.Len() != 0 {
+		t.Fatalf("cancelled pump copied %d bytes, want 0", dst.Len())
+	}
+}
+
+func TestPump_WriteStallFailsLoudly(t *testing.T) {
+	tr := newActiveTransfer()
+	if err := pump(bytes.NewReader([]byte("data")), stallWriter{}, tr); err != errWriteStall {
+		t.Fatalf("pump err = %v, want errWriteStall", err)
+	}
+}
+
+func TestPump_PropagatesReadError(t *testing.T) {
+	tr := newActiveTransfer()
+	want := errors.New("boom")
+	var dst bytes.Buffer
+	if err := pump(errReader{err: want}, &dst, tr); err != want {
+		t.Fatalf("pump err = %v, want %v", err, want)
+	}
+}
+
+// stallWriter accepts no bytes and reports no error — the degenerate
+// state pump must refuse to loop on.
+type stallWriter struct{}
+
+func (stallWriter) Write(p []byte) (int, error) { return 0, nil }
+
+type errReader struct{ err error }
+
+func (e errReader) Read(p []byte) (int, error) { return 0, e.err }
+
+func TestSyncWidget_ClampsHugeSizesWithoutOverflow(t *testing.T) {
+	m := NewManager("a")
+	tr := &Transfer{
+		Direction:  Download,
+		RemotePath: "/big.iso",
+		Size:       int64(math.MaxInt32) * 4, // ~8 GiB
+		StartedAt:  time.Now(),
+		cancel:     make(chan struct{}),
+	}
+	tr.bytes.Store(int64(math.MaxInt32) * 2) // ~halfway
+	m.mu.Lock()
+	m.list = append(m.list, tr)
+	m.mu.Unlock()
+
+	tp := taskprogress.New(geom.NewRect(0, 0, 20, 1))
+	m.SyncWidget(tp)
+	if len(tp.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tp.Tasks))
+	}
+	task := tp.Tasks[0]
+	if task.Max < 1 || task.Max > math.MaxInt32 {
+		t.Fatalf("Max out of range: %d", task.Max)
+	}
+	if task.Value < 0 || task.Value > task.Max {
+		t.Fatalf("Value %d out of [0,Max=%d]", task.Value, task.Max)
+	}
+	// Progress ratio should survive the down-scaling (≈ 50%).
+	ratio := float64(task.Value) / float64(task.Max)
+	if ratio < 0.4 || ratio > 0.6 {
+		t.Fatalf("progress ratio %.2f not ≈ 0.5", ratio)
 	}
 }

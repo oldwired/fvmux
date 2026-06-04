@@ -1,7 +1,9 @@
 package headless
 
 import (
+	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	fvmenus "github.com/oldwired/fv-go/pkg/fv/menus"
@@ -65,6 +67,50 @@ func TestMenuAndPaletteCoverEveryVisibleCommand(t *testing.T) {
 				"(or is Hidden)", id)
 		}
 	}
+}
+
+// TestMenuHotkeysUniqueWithinEachMenu guards against Borland ~X~ hotkey
+// collisions: within any single menu (and each submenu independently),
+// no two entries may claim the same accelerator letter, or the second is
+// unreachable by keyboard. The bar row and every submenu are separate
+// namespaces.
+func TestMenuHotkeysUniqueWithinEachMenu(t *testing.T) {
+	reg := commands.Defaults()
+	mb := menus.Build(geom.NewRect(0, 0, 200, 1), reg)
+	checkMenuHotkeys(t, "menubar", mb.Menu)
+}
+
+func checkMenuHotkeys(t *testing.T, path string, m *fvmenus.Menu) {
+	if m == nil {
+		return
+	}
+	seen := map[rune]string{}
+	for _, it := range m.Items {
+		if it.IsSeparator() {
+			continue
+		}
+		if hk, ok := hotkeyOf(it.Name); ok {
+			if prev, dup := seen[hk]; dup {
+				t.Errorf("menu %q: hotkey %q collides between %q and %q",
+					path, string(hk), prev, it.Name)
+			} else {
+				seen[hk] = it.Name
+			}
+		}
+		if it.Sub != nil {
+			checkMenuHotkeys(t, path+" › "+it.Name, it.Sub)
+		}
+	}
+}
+
+// hotkeyOf extracts the lowercased accelerator letter from a "~X~" marker
+// in a menu label, or reports false when the label has none.
+func hotkeyOf(name string) (rune, bool) {
+	i := strings.Index(name, "~")
+	if i < 0 || i+2 >= len(name) || name[i+2] != '~' {
+		return 0, false
+	}
+	return unicode.ToLower(rune(name[i+1])), true
 }
 
 // walkMenu accumulates every leaf Item.Command in counts. Submenus

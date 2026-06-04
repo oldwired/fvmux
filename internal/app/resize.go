@@ -15,6 +15,12 @@ func (m *Mux) enterResizeMode() {
 		return
 	}
 	m.resizeMode = true
+	// Suspend the prefix listener: it sits ahead of the resize view in
+	// z-order, so without this it would arm on (and swallow) the prefix
+	// key instead of letting resize mode absorb the keystroke.
+	if m.prefix != nil {
+		m.prefix.SetSuspended(true)
+	}
 	m.resizeView = prefix.NewResizeView(m.handleResizeKey)
 	m.App.Desktop.Insert(m.resizeView)
 	m.refreshStatusBar()
@@ -29,6 +35,9 @@ func (m *Mux) exitResizeMode() {
 	if m.resizeView != nil {
 		m.App.Desktop.Delete(m.resizeView)
 		m.resizeView = nil
+	}
+	if m.prefix != nil {
+		m.prefix.SetSuspended(false)
 	}
 	m.refreshStatusBar()
 }

@@ -13,6 +13,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 )
@@ -74,8 +76,21 @@ func (p Paths) StateFile() string       { return filepath.Join(p.StateRoot, "sta
 func (p Paths) SessionFile(name string) string {
 	return filepath.Join(p.Root, "sessions", name+".toml")
 }
+
+// ControlSocketDir is the directory holding SSH ControlMaster sockets.
+func (p Paths) ControlSocketDir() string { return filepath.Join(p.StateRoot, "cm") }
+
+// ControlSocket returns the ControlMaster socket path for alias. The
+// filename is a short hash of the alias rather than the alias itself, so
+// that (a) aliases containing path separators / "../" can't escape the
+// cm dir, and (b) the assembled path can never exceed the ~104-byte unix
+// socket-path limit (a long alias under a deep $XDG_STATE_HOME would
+// otherwise make ssh silently fall back to a non-multiplexed connection).
+// The hash is deterministic, so the same alias always maps to the same
+// socket and masters are reused across connections and fvmux instances.
 func (p Paths) ControlSocket(alias string) string {
-	return filepath.Join(p.StateRoot, "cm", alias+".sock")
+	sum := sha256.Sum256([]byte(alias))
+	return filepath.Join(p.ControlSocketDir(), hex.EncodeToString(sum[:8])+".sock")
 }
 
 // ThemesDir is the directory fvmux scans for user theme TOMLs at

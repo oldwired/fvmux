@@ -51,11 +51,30 @@ func main() {
 
 	cfg, err := config.Load(paths.ConfigFile())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fvmux: warning loading config:", err)
+		// config.toml is auto-overwritten on the next theme/prefix change,
+		// so a malformed file would be silently destroyed. Back it up and
+		// start clean instead of clobbering the user's edits.
+		if bak, berr := config.BackupCorrupt(paths.ConfigFile()); berr == nil {
+			fmt.Fprintf(os.Stderr, "fvmux: config.toml failed to parse (%v); backed up to %s, continuing on defaults\n", err, bak)
+		} else {
+			fmt.Fprintln(os.Stderr, "fvmux: warning loading config:", err)
+		}
+		cfg = config.Defaults()
+	}
+	// state.toml is likewise auto-written — back up a corrupt one so the
+	// next SaveState doesn't overwrite it.
+	if _, serr := config.LoadState(paths.StateFile()); serr != nil {
+		if bak, berr := config.BackupCorrupt(paths.StateFile()); berr == nil {
+			fmt.Fprintf(os.Stderr, "fvmux: state.toml failed to parse (%v); backed up to %s\n", serr, bak)
+		} else {
+			fmt.Fprintln(os.Stderr, "fvmux: warning loading state:", serr)
+		}
 	}
 	profiles, err := profile.Load(paths.ProfilesFile())
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fvmux: warning loading profiles:", err)
+		// Hand-edited file, never auto-overwritten: warn and run on
+		// defaults, leaving the user's file intact to fix.
+		fmt.Fprintln(os.Stderr, "fvmux: warning loading profiles (using defaults):", err)
 	}
 
 	a, err := fvapp.NewApplication()
@@ -67,20 +86,22 @@ func main() {
 
 	cols, rows := a.BaseView().Size.X, a.BaseView().Size.Y
 	reg := commands.Defaults()
-	// Rebind chords if the user previously chose a non-default prefix
-	// — Defaults() registers everything under "C-g " so the menu/palette
-	// stay consistent with whichever prefix is configured.
-	if cfg.General.PrefixKey != "" && cfg.General.PrefixKey != "C-g" {
-		reg.RebindPrefix("C-g", cfg.General.PrefixKey)
-	}
-	// Apply any user overrides from keybindings.toml. Empty / missing
-	// file is fine; bad entries are skipped silently (Lookups return nil).
+	// Apply user overrides from keybindings.toml FIRST, while the registry
+	// is still in the default "C-g" prefix space — keybindings.toml chords
+	// are authored against the default prefix (the template uses "C-g X").
+	// Empty / missing file is fine; bad entries are skipped silently.
 	if overrides, err := config.LoadKeybindings(paths.KeybindingsFile()); err == nil {
 		if len(overrides) > 0 {
 			reg.ApplyOverrides(overrides)
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "fvmux: warning loading keybindings:", err)
+	}
+	// THEN rebind the whole registry — defaults and overrides alike — onto
+	// the configured prefix, so a "C-g w" override correctly follows to
+	// "C-b w" when the user runs with Ctrl-B.
+	if cfg.General.PrefixKey != "" && cfg.General.PrefixKey != "C-g" {
+		reg.RebindPrefix("C-g", cfg.General.PrefixKey)
 	}
 	var mux *muxapp.Mux // captured by the rebuild closure; assigned below.
 	rebuildMenu := func() {
@@ -112,15 +133,6 @@ func main() {
 	a.SetStatusLine(bar.Line)
 
 	a.OnCommand = func(cmd uint16, ev *drivers.Event) bool {
-		// Internal triggers that carry a payload on InfoPtr need to
-		// see the event directly; the registry's Action(ctx) signature
-		// has no slot for it. Route them here, fall through otherwise.
-		if cmd == commands.CmdAutoClosePane {
-			if pane, ok := ev.InfoPtr.(*session.Pane); ok {
-				mux.AutoClosePane(pane)
-				return true
-			}
-		}
 		// Dynamic-menu items (themes/profiles/sessions/etc.) are
 		// stored in the Mux's per-rebuild dispatch table.
 		if mux.DispatchDynamic(cmd) {
@@ -128,14 +140,7 @@ func main() {
 		}
 		return muxapp.Dispatch(reg, &commands.Ctx{App: a}, cmd)
 	}
-	a.OnQuitRequest = func() bool {
-		if !mux.CanQuit() {
-			return false
-		}
-		// Persist session on graceful quit (no-op if no session name).
-		_ = mux.SaveSessionSilent()
-		return true
-	}
+	a.OnQuitRequest = mux.OnQuitRequested
 	// Surface fv-go's new diagnostic hooks via slog so the in-app log
 	// viewer (Ctrl-G L) catches backend / queue failures that would
 	// otherwise go unobserved. Defaults are conservative — these only
@@ -147,6 +152,9 @@ func main() {
 		slog.Warn("event dropped", "what", ev.What, "command", ev.Command)
 	}
 	a.OnPanic = func(recovered any) {
+		// Last-ditch session save before the panic unwinds. Runs on the
+		// recover path (UI goroutine), so reading window state is safe.
+		_ = mux.SaveSessionSilent()
 		slog.Error("panic in main loop", "recovered", fmt.Sprintf("%v", recovered))
 	}
 
@@ -156,6 +164,7 @@ func main() {
 	}
 
 	mux.InstallPrefixListener()
+	mux.InstallSignalHandlers()
 	mux.StartTicker()
 	defer mux.StopTicker()
 	defer mux.ShutdownSSHPool()

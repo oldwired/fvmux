@@ -117,6 +117,68 @@ func TestRecordPress_TriplePressFires(t *testing.T) {
 	}
 }
 
+func TestPrefix_TriplePressViaHandleEvent(t *testing.T) {
+	reg, _, _ := newTestRegistry()
+	v := New(reg, &commands.Ctx{}, Default)
+	var fired int
+	v.OnTriplePress = func() { fired++ }
+
+	// Three real prefix taps through the state machine (not a direct
+	// recordPress) — the gesture as a user actually performs it.
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	if fired != 1 {
+		t.Fatalf("three prefix taps should fire OnTriplePress once, got %d", fired)
+	}
+}
+
+func TestPrefix_CtrlSecondKeyDistinctFromBareLetter(t *testing.T) {
+	r := commands.New()
+	var bare, ctrl bool
+	r.Register(&commands.Command{ID: 1, Name: "bare", Chord: "C-g c",
+		Action: func(*commands.Ctx) { bare = true }})
+	r.Register(&commands.Command{ID: 2, Name: "ctrl", Chord: "C-g C-c",
+		Action: func(*commands.Ctx) { ctrl = true }})
+	v := New(r, &commands.Ctx{}, Default)
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	v.HandleEvent(keyEvent(0, 'c')) // bare 'c'
+	if !bare || ctrl {
+		t.Fatalf("C-g c should fire bare only (bare=%v ctrl=%v)", bare, ctrl)
+	}
+
+	bare, ctrl = false, false
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	// Some terminals report the bare letter in UnicodeChar alongside the
+	// Ctrl key code; the chord must still resolve to C-c, not c.
+	v.HandleEvent(keyEvent(consts.KbCtrlC, 'c'))
+	if !ctrl || bare {
+		t.Fatalf("C-g C-c should fire ctrl only (bare=%v ctrl=%v)", bare, ctrl)
+	}
+}
+
+func TestPrefix_SuspendedPassesThrough(t *testing.T) {
+	reg, fired, _ := newTestRegistry()
+	v := New(reg, &commands.Ctx{}, Default)
+	v.SetSuspended(true)
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	if v.Armed() {
+		t.Fatal("suspended prefix must not arm on the prefix key")
+	}
+	v.HandleEvent(keyEvent(0, 'x'))
+	if *fired {
+		t.Fatal("suspended prefix must not dispatch chords")
+	}
+
+	v.SetSuspended(false)
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	if !v.Armed() {
+		t.Fatal("resumed prefix should arm again")
+	}
+}
+
 func TestRecordPress_OutsideWindowDoesNotFire(t *testing.T) {
 	v := &View{}
 	var fired int

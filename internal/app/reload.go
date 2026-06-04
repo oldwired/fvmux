@@ -42,19 +42,21 @@ func (m *Mux) ReloadConfig() {
 		slog.Warn("reload: keybindings.toml", "err", err)
 	}
 
-	// Factory baseline → prefix-key → user overrides. Order matters:
-	// the prefix rebind sweeps every chord in one pass, so overrides
-	// have to run after it (otherwise they'd be re-rebound). Resetting
-	// first ensures a removed user override actually goes away.
+	// Factory baseline → user overrides → prefix-key. Order matters:
+	// overrides are authored in the default "C-g" space, so they must be
+	// applied before the prefix rebind sweeps every chord onto the
+	// configured prefix (the rebind then carries an overridden "C-g w"
+	// to "C-b w" too). Resetting first ensures a removed user override
+	// actually goes away.
 	m.Reg.ResetChords()
+	if len(overrides) > 0 {
+		m.Reg.ApplyOverrides(overrides)
+	}
 	if pk := m.Opts.Config.General.PrefixKey; pk != "" && pk != "C-g" {
 		m.Reg.RebindPrefix("C-g", pk)
 		if m.prefix != nil {
 			m.prefix.SetSpec(prefix.Lookup(pk))
 		}
-	}
-	if len(overrides) > 0 {
-		m.Reg.ApplyOverrides(overrides)
 	}
 
 	m.reloadThemesInternal()

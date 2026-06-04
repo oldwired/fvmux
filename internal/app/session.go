@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
@@ -48,6 +49,7 @@ func (m *Mux) SaveSessionSilent() error {
 
 func (m *Mux) buildSnapshot() *session.Snapshot {
 	snap := &session.Snapshot{
+		Version: session.SnapshotVersion,
 		Name:    m.Opts.SessionName,
 		Created: time.Now(),
 		Active:  0,
@@ -79,6 +81,20 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 		bv := ws.Frame.BaseView()
 		bounds := geom.NewRect(bv.Origin.X, bv.Origin.Y,
 			bv.Origin.X+bv.Size.X, bv.Origin.Y+bv.Size.Y)
+		// Capture which leaf is focused / zoomed by index into the
+		// leaves order serde preserves, so reload restores them rather
+		// than always falling back to the first leaf, unzoomed.
+		leaves := ws.Root.CollectLeaves()
+		focusIdx := 0
+		zoomed := 0 // 0 = not zoomed; 1-based leaf index otherwise.
+		for i, l := range leaves {
+			if l == ws.Focus {
+				focusIdx = i
+			}
+			if ws.Zoomed != nil && l.Pane != nil && l.Pane.ID == *ws.Zoomed {
+				zoomed = i + 1
+			}
+		}
 		snap.Windows = append(snap.Windows, &session.WindowSnapshot{
 			ID:        uint64(ws.ID),
 			Number:    ws.Number,
@@ -88,7 +104,10 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 				X: bounds.A.X, Y: bounds.A.Y,
 				W: bounds.Width(), H: bounds.Height(),
 			},
-			Layout: layout.Marshal(ws.Root),
+			Layout:     layout.Marshal(ws.Root),
+			FocusIndex: focusIdx,
+			Zoomed:     zoomed,
+			SyncInput:  ws.SyncInput,
 		})
 	}
 	return snap
@@ -102,6 +121,12 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	if snap == nil {
 		return nil
+	}
+	if snap.Version > session.SnapshotVersion {
+		// Forward-compat is best-effort: load anyway, unknown fields are
+		// ignored. Pre-alpha — no migration, just a heads-up in the log.
+		slog.Warn("session snapshot is from a newer fvmux",
+			"file_version", snap.Version, "supported", session.SnapshotVersion)
 	}
 	for _, ws := range snap.Windows {
 		bounds := geom.NewRect(ws.Pos.X, ws.Pos.Y,
@@ -193,12 +218,21 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 		UserTitle: ws.UserTitle,
 		Frame:     w,
 		Root:      root,
+		SyncInput: ws.SyncInput,
 	}
-	if len(leaves) > 0 {
+	switch {
+	case ws.FocusIndex >= 0 && ws.FocusIndex < len(leaves):
+		state.Focus = leaves[ws.FocusIndex]
+	case len(leaves) > 0:
 		state.Focus = leaves[0]
 	}
+	// Zoomed is 1-based (0 = none); restore it if the index is still valid.
+	if ws.Zoomed > 0 && ws.Zoomed <= len(leaves) && leaves[ws.Zoomed-1].Pane != nil {
+		id := leaves[ws.Zoomed-1].Pane.ID
+		state.Zoomed = &id
+	}
 
-	body := layout.Materialize(root, interior, nil)
+	body := layout.Materialize(root, interior, state.Zoomed)
 	w.Insert(body)
 
 	m.registerWindow(w, state)

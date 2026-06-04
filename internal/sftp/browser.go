@@ -3,6 +3,7 @@ package sftp
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/anim"
@@ -221,6 +222,15 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	remote.refreshHeader()
 	local.refreshHeader()
 
+	// Shared async-refresh lifetime state: closed stops new remote reads
+	// once teardown starts; refreshWG lets OnClose wait for an in-flight
+	// read to finish before closing the SFTP client. Only the remote
+	// panel does async reads, so only it needs them.
+	var browserClosed atomic.Bool
+	var refreshWG sync.WaitGroup
+	remote.closed = &browserClosed
+	remote.refreshWG = &refreshWG
+
 	// Preview spans the right column, full height of the panel area.
 	// Extra X and extra Y both flow into the preview.
 	pp := newPreviewPane(d, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
@@ -318,14 +328,24 @@ func Show(a *fvapp.Application, alias, controlPath string, onClose func()) error
 	// the window is removed from the desktop, so we have a clean
 	// window to act on.
 	d.OnClose = func() {
-		mgr.CancelAll()
+		mgr.CancelAll()           // cooperative cancel of in-flight transfers.
+		browserClosed.Store(true) // stop new async remote reads.
 		tt.ok = false
 		anim.Unregister(tt)
 		removeLiveMgr(mgr)
-		_ = c.Close()
-		if onClose != nil {
-			onClose()
-		}
+		// Close the SFTP client only after every transfer goroutine AND
+		// any in-flight async listing refresh has drained — pkg/sftp's
+		// Client is not safe to use concurrently with Close. Run on a
+		// background goroutine so a network-stalled transfer can't freeze
+		// the UI; the cancel above gets healthy transfers out promptly.
+		go func() {
+			mgr.Wait()
+			refreshWG.Wait()
+			_ = c.Close()
+			if onClose != nil {
+				onClose()
+			}
+		}()
 	}
 
 	// Non-modal: insert into the desktop and return immediately. The

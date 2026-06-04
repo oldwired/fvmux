@@ -39,6 +39,7 @@ command = "Kill Pane"
 	got := reg.LookupChord("C-g X")
 	if got == nil {
 		t.Fatal("LookupChord C-g X = nil after ApplyOverrides")
+		return
 	}
 	if got.Name != "Kill Pane" {
 		t.Errorf("C-g X bound to %q, want %q", got.Name, "Kill Pane")

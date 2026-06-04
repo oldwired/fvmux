@@ -9,23 +9,36 @@ import (
 	"path/filepath"
 )
 
-// Write replaces path with data, atomically. The write goes to
-// path+".tmp", is fsynced, then renamed over the target. perm is the
-// final mode of the renamed file. If anything fails, the .tmp file is
-// removed and the original path is untouched.
+// Write replaces path with data, atomically. The write goes to a
+// uniquely-named temp file in the same directory, is fsynced, then
+// renamed over the target. perm is the final mode of the renamed file.
+// If anything fails, the temp file is removed and the original path is
+// untouched.
+//
+// The temp file is created with a unique name (O_EXCL via os.CreateTemp)
+// rather than a fixed path+".tmp", so two processes writing the same
+// target concurrently never clobber each other's temp file — fvmux is
+// designed to run as multiple instances inside one tmux.
 //
 // Callers should pass 0o600 for files that may contain sensitive
 // per-user state (state.toml, keybindings.toml, sessions/*.toml) and
 // 0o644 for shareable config (config.toml, profiles.toml, hosts.toml).
 func Write(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp := path + ".tmp"
 
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 
+	// CreateTemp makes the file 0o600; bring it to the requested mode
+	// before publishing so shareable configs land 0o644.
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)

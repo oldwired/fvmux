@@ -15,9 +15,11 @@ func (m *Mux) openPalette() {
 	state, _ := config.LoadState(m.Opts.Paths.StateFile())
 	mru := append([]uint16(nil), state.PaletteMRU...)
 	persist := func(newMRU []uint16) {
-		st, _ := config.LoadState(m.Opts.Paths.StateFile())
-		st.PaletteMRU = newMRU
-		_ = config.SaveState(m.Opts.Paths.StateFile(), st)
+		_ = config.WithStateLock(m.Opts.Paths.StateFile(), func() error {
+			st, _ := config.LoadState(m.Opts.Paths.StateFile())
+			st.PaletteMRU = newMRU
+			return config.SaveState(m.Opts.Paths.StateFile(), st)
+		})
 	}
 	specials := []palette.SpecialEntry{
 		{

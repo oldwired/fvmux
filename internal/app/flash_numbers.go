@@ -32,7 +32,6 @@ func (m *Mux) flashNumbers() {
 	if sb.Len() == 0 {
 		return
 	}
-	m.flashUntil = time.Now().Add(1500 * time.Millisecond)
-	m.flashText = sb.String()
+	m.setFlash(sb.String(), 1500*time.Millisecond, flashPrioNumbers)
 	m.refreshStatusBar()
 }

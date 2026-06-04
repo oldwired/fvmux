@@ -7,6 +7,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/keys"
 )
 
 // keybindingsFile is the on-disk shape of ~/.config/fvmux/keybindings.toml.
@@ -21,9 +22,10 @@ type bindingTOML struct {
 
 // LoadKeybindings parses path into a slice of registry overrides. A
 // missing file yields a nil slice and nil error — empty config is a
-// valid state. Parse errors return the file's error along with whatever
-// bindings parsed successfully (BurntSushi's behaviour on partial
-// decode), so callers can still ApplyOverrides on the good ones.
+// valid state. A parse error yields a nil slice and the error: the file
+// is hand-edited and never auto-overwritten, so the caller warns and runs
+// with no overrides (leaving the user's file intact to fix) rather than
+// applying a partial set.
 func LoadKeybindings(path string) ([]commands.Override, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -39,7 +41,11 @@ func LoadKeybindings(path string) ([]commands.Override, error) {
 	out := make([]commands.Override, 0, len(f.Bindings))
 	for _, b := range f.Bindings {
 		out = append(out, commands.Override{
-			Chord:   b.Chord,
+			// Canonicalise so "c-g tab" / "C-g Tab" both match the
+			// registry's binding form regardless of how the user spelled
+			// it. (Chords stay in the default-prefix space; a non-default
+			// prefix is applied afterwards — see main.go.)
+			Chord:   keys.Canonical(b.Chord),
 			Command: b.Command,
 		})
 	}

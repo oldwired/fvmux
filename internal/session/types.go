@@ -51,6 +51,12 @@ type Pane struct {
 	Dead    bool
 	ExitErr error
 
+	// Rot13, when set, makes the pane's OnFeed filter rotate output (the
+	// :rot13 easter egg). An atomic so the egg's timer can flip it back
+	// without racing the terminal read loop that consults it — the filter
+	// itself is installed once at spawn, never swapped on a live terminal.
+	Rot13 atomic.Bool
+
 	// Most-recent rect we materialized this pane into (window-local).
 	// FocusDir compares centres in this space.
 	LastRect geom.Rect

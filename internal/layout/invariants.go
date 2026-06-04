@@ -15,6 +15,8 @@ import (
 //  5. Each PaneID appears once across the tree.
 //  6. 0 < Ratio < 1 on every Split.
 //  7. Leaf nodes have nil children; Split nodes have nil Pane.
+//  8. No *PaneNode is reachable twice (no aliasing/DAG), and a Split's
+//     two children are distinct nodes.
 //
 // Property tests assert this after every random mutation.
 func CheckInvariants(root *PaneNode) error {
@@ -24,11 +26,14 @@ func CheckInvariants(root *PaneNode) error {
 	if root.Parent != nil {
 		return fmt.Errorf("root has non-nil parent")
 	}
-	seen := map[session.PaneID]bool{}
-	return checkNode(root, seen)
+	return checkNode(root, map[session.PaneID]bool{}, map[*PaneNode]bool{})
 }
 
-func checkNode(n *PaneNode, seen map[session.PaneID]bool) error {
+func checkNode(n *PaneNode, seen map[session.PaneID]bool, seenNodes map[*PaneNode]bool) error {
+	if seenNodes[n] {
+		return fmt.Errorf("node %p reachable more than once (aliasing)", n)
+	}
+	seenNodes[n] = true
 	switch n.Kind {
 	case NodeLeaf:
 		if n.Pane == nil {
@@ -48,6 +53,9 @@ func checkNode(n *PaneNode, seen map[session.PaneID]bool) error {
 		if n.A == nil || n.B == nil {
 			return fmt.Errorf("split missing child")
 		}
+		if n.A == n.B {
+			return fmt.Errorf("split's two children are the same node %p", n.A)
+		}
 		if n.A.Parent != n {
 			return fmt.Errorf("A.Parent mismatch at %p", n)
 		}
@@ -57,10 +65,10 @@ func checkNode(n *PaneNode, seen map[session.PaneID]bool) error {
 		if !(n.Ratio > 0 && n.Ratio < 1) {
 			return fmt.Errorf("split ratio %f out of (0,1)", n.Ratio)
 		}
-		if err := checkNode(n.A, seen); err != nil {
+		if err := checkNode(n.A, seen, seenNodes); err != nil {
 			return err
 		}
-		if err := checkNode(n.B, seen); err != nil {
+		if err := checkNode(n.B, seen, seenNodes); err != nil {
 			return err
 		}
 	default:

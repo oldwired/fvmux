@@ -56,37 +56,22 @@ func (m *Mux) offerAuthThenRetry(alias string) {
 
 	// Poll for the master socket. Fires the SFTP retry on the UI
 	// goroutine via views.CallSoon. Bounded: gives up after 30 s so
-	// a failed auth doesn't leak a forever-goroutine. The Acquire
-	// above is paired with a Release on whichever exit path runs.
-	go pollForMaster(alias, sock, 30*time.Second, func(ok bool) {
+	// a failed auth doesn't leak a forever-goroutine. Registered with
+	// sftpRestore so a session switch cancels a stale poll (otherwise it
+	// could pop a browser into the wrong session). The Acquire above is
+	// paired with a Release on whichever exit path runs.
+	cancel := m.sftpRestore.start(alias)
+	go func() {
+		defer m.sftpRestore.finish(alias, cancel)
+		alive := pollForMasterCancellable(alias, sock, 30*time.Second, cancel)
 		views.CallSoon(func() {
 			m.sshPool.Release(alias)
-			if !ok {
+			if !alive {
 				return // user gave up / auth failed; pane is still there.
 			}
 			m.openSftpBrowser(alias)
 		})
-	})
-}
-
-// pollForMaster waits for the ControlMaster behind sock to be alive
-// AND authenticated. Uses `ssh -O check` rather than os.Stat because
-// the socket file appears the moment ssh starts (before auth
-// completes), and an SFTP open through a still-handshaking master
-// fails with auth-required.
-//
-// Calls done(true) when check reports success, done(false) on
-// timeout. Runs in a goroutine — caller marshals onto the UI thread.
-func pollForMaster(alias, sock string, timeout time.Duration, done func(ok bool)) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if masterAlive(alias, sock) {
-			done(true)
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	done(false)
+	}()
 }
 
 // masterAlive runs `ssh -O check -o ControlPath=sock alias` and
@@ -133,8 +118,10 @@ func (m *Mux) scheduleSftpRestore(alias string) {
 			// offerAuthThenRetry fallback. If the master is alive but
 			// SFTP somehow still fails, log and move on.
 			sock := m.sshPool.Acquire(alias)
+			// sftp.Show calls onClose (→ Release) itself on every error
+			// path, so do NOT Release again here — that would double-count
+			// and drive the alias refcount below its true value.
 			if err := sftp.Show(m.App, alias, sock, func() { m.sshPool.Release(alias) }); err != nil {
-				m.sshPool.Release(alias)
 				slog.Warn("session restore: sftp browser open failed",
 					"alias", alias, "err", err)
 			}

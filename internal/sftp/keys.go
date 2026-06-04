@@ -220,6 +220,9 @@ func (h *keyHandler) copyAcross() {
 	if active.isRemote {
 		// Remote → local download.
 		target := filepath.Join(other.cwd, filepath.Base(e.Path))
+		if _, err := os.Stat(target); err == nil && !h.confirmOverwrite(target) {
+			return
+		}
 		if _, err := h.mgr.Start(active.c, Download, target, e.Path); err != nil {
 			msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
 				"Download failed: %s", []any{err.Error()}, msgbox.OKOnly)
@@ -236,8 +239,18 @@ func (h *keyHandler) copyAcross() {
 	if other.cwd == "/" {
 		remote = "/" + filepath.Base(e.Path)
 	}
+	if _, err := other.c.Stat(remote); err == nil && !h.confirmOverwrite(remote) {
+		return
+	}
 	if _, err := h.mgr.Start(other.c, Upload, e.Path, remote); err != nil {
 		msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
 			"Upload failed: %s", []any{err.Error()}, msgbox.OKOnly)
 	}
+}
+
+// confirmOverwrite asks before clobbering an existing destination,
+// mirroring the F8 delete confirmation. Returns true to proceed.
+func (h *keyHandler) confirmOverwrite(dest string) bool {
+	return msgbox.Showf(&h.app.Desktop.Group, msgbox.Question,
+		"%s\nalready exists. Overwrite?", []any{dest}, msgbox.YesNo) == consts.CmYes
 }

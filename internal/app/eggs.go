@@ -4,9 +4,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/notification"
-
-	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
 // handleEgg checks one of fvmux's built-in `:command` easter eggs. Returns
@@ -37,29 +36,30 @@ func (m *Mux) eggTea() {
 	})
 }
 
-// eggRot13 swaps the focused pane's terminal output through a rot13
-// filter for 10 seconds. Uses fv-go's Terminal.OnFeed hook. The
-// restore timer is tracked so shutdown cancels it cleanly.
+// eggRot13 rotates the focused pane's terminal output for 10 seconds.
+// The OnFeed filter is installed once at spawn (wireTerminalCallbacks)
+// and merely consults pane.Rot13; flipping that atomic — rather than
+// swapping OnFeed on a running terminal — keeps the read loop race-free.
 func (m *Mux) eggRot13() {
-	t := m.FocusedTerminal()
-	if t == nil {
+	ws := m.currentWindow()
+	if ws == nil || ws.Focus == nil || ws.Focus.Pane == nil {
 		return
 	}
-	prev := t.OnFeed
-	t.OnFeed = func(in []byte) []byte { return whimsy.Rot13(in) }
+	pane := ws.Focus.Pane
+	pane.Rot13.Store(true)
 	m.notice("rot13", "Output rotated for 10 s.", 4*time.Second)
-	m.scheduleEgg(10*time.Second, func() {
-		t.OnFeed = prev
-	})
+	m.scheduleEgg(10*time.Second, func() { pane.Rot13.Store(false) })
 }
 
 // scheduleEgg fires fn after d, tracking the timer so StopEggs can
-// cancel everything pending at shutdown. Callers should not hold onto
-// the returned reference.
+// cancel everything pending at shutdown. fn is marshalled onto the UI
+// goroutine (via CallSoon) because egg callbacks touch UI state — the
+// Desktop (notifications) and pane flags — which is not safe to mutate
+// from the timer goroutine.
 func (m *Mux) scheduleEgg(d time.Duration, fn func()) {
 	var t *time.Timer
 	t = time.AfterFunc(d, func() {
-		fn()
+		views.CallSoon(fn)
 		m.eggMu.Lock()
 		defer m.eggMu.Unlock()
 		for i, x := range m.eggTimers {

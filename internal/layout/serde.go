@@ -42,6 +42,10 @@ func marshalNode(n *PaneNode, b *strings.Builder) {
 			b.WriteString("profile=")
 			b.WriteString(n.Pane.Profile)
 		} else {
+			// A profile-less (ad-hoc) pane has no spawn template to
+			// reconstruct, so it reloads as the default shell. Explicit
+			// and documented rather than silent — the live process can't
+			// be resurrected across a restart regardless.
 			b.WriteString("profile=shell")
 		}
 		if n.Pane != nil && n.Pane.Title != "" {
@@ -54,7 +58,10 @@ func marshalNode(n *PaneNode, b *strings.Builder) {
 		} else {
 			b.WriteString("split-h:")
 		}
-		b.WriteString(strconv.FormatFloat(n.Ratio, 'f', 3, 64))
+		// 'g' with -1 precision round-trips the ratio exactly (the old
+		// 'f',3 quantised drag-resized / preset ratios, so save→load was
+		// not an identity).
+		b.WriteString(strconv.FormatFloat(n.Ratio, 'g', -1, 64))
 		b.WriteByte('{')
 		marshalNode(n.A, b)
 		b.WriteByte('}')

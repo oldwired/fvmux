@@ -73,7 +73,7 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdFocusRight, Category: "Pane", Name: "Focus Right", MenuLabel: "Focus ~R~ight", Chord: "C-g l"})
 
 	r.Register(&Command{ID: CmdSwapNext, Category: "Pane", Name: "Swap with Next", MenuLabel: "Swap with ~N~ext", Chord: "C-g }"})
-	r.Register(&Command{ID: CmdSwapPrev, Category: "Pane", Name: "Swap with Prev", MenuLabel: "Swap with Pre~v~", Chord: "C-g {"})
+	r.Register(&Command{ID: CmdSwapPrev, Category: "Pane", Name: "Swap with Prev", MenuLabel: "S~w~ap with Prev", Chord: "C-g {"})
 
 	r.Register(&Command{ID: CmdBreakOut, Category: "Pane", Name: "Break Out to Window", MenuLabel: "~B~reak Out to Window", Chord: "C-g !"})
 
@@ -226,7 +226,6 @@ func Defaults() *Registry {
 	// Hidden — internal triggers.
 	r.Register(&Command{ID: CmdTickerRedraw, Category: "Help", Name: "Ticker Redraw", Hidden: true})
 	r.Register(&Command{ID: CmdPaneContextMenu, Category: "Pane", Name: "Pane Context Menu", Hidden: true})
-	r.Register(&Command{ID: CmdAutoClosePane, Category: "Pane", Name: "Auto-close Pane", Hidden: true})
 
 	return r
 }

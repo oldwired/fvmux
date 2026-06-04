@@ -33,6 +33,11 @@ type View struct {
 	ctx  *commands.Ctx
 	spec Spec
 
+	// suspended, when true, makes HandleEvent pass every event through
+	// untouched. Set while a modal sub-mode (resize) owns the keyboard so
+	// the prefix key reaches that mode instead of arming a chord.
+	suspended bool
+
 	armedAt time.Time // zero value ⇒ not armed
 
 	// Last two prefix-press timestamps (newest at [1]). Three presses
@@ -63,6 +68,17 @@ func New(reg *commands.Registry, ctx *commands.Ctx, spec Spec) *View {
 // user changes prefix_key via the first-run wizard or a reset.
 func (v *View) SetSpec(spec Spec) { v.spec = spec }
 
+// SetSuspended toggles passthrough mode. While suspended the prefix view
+// ignores (and does not consume) every event, so a sticky sub-mode like
+// resize — whose listener sits behind the prefix view in z-order — sees
+// the prefix key itself instead of having it swallowed into a chord.
+func (v *View) SetSuspended(s bool) {
+	v.suspended = s
+	if s {
+		v.armedAt = time.Time{} // drop any half-entered chord.
+	}
+}
+
 // Armed reports whether a prefix has been seen and is awaiting a chord.
 // Surfaced for the status-line PREFIX indicator (sub-step 6).
 func (v *View) Armed() bool {
@@ -78,6 +94,10 @@ func (v *View) Draw() {}
 // HandleEvent runs the prefix state machine. Only keyboard events are
 // inspected; everything else falls through unchanged.
 func (v *View) HandleEvent(ev *drivers.Event) {
+	if v.suspended {
+		v.Base.HandleEvent(ev)
+		return
+	}
 	if ev.What&consts.EvKeyboard == 0 {
 		v.Base.HandleEvent(ev)
 		return
@@ -100,6 +120,14 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 
 	// Second keystroke: disarm regardless of match.
 	v.armedAt = time.Time{}
+
+	// A repeated prefix press lands here (the double-tap that sends a
+	// literal prefix). Count it too, so three taps in a row fire
+	// OnTriplePress — recording only in the arm branch would miss every
+	// even-numbered tap and the gesture could never reach three.
+	if ev.KeyCode == v.spec.KeyCode {
+		v.recordPress(time.Now())
+	}
 
 	chord := v.chordOf(ev)
 	if chord == "" {
@@ -150,10 +178,39 @@ func (v *View) chordOf(ev *drivers.Event) string {
 	if atom := specialAtom(ev.KeyCode); atom != "" {
 		return v.spec.ChordToken + " " + atom
 	}
+	// A Ctrl-modified second key must canonicalise to a "C-x" token, not
+	// fall through to its bare letter — otherwise C-g C-c would collide
+	// with C-g c (e.g. a stray Ctrl firing New Window).
+	if atom := ctrlAtom(ev.KeyCode); atom != "" {
+		return v.spec.ChordToken + " " + atom
+	}
 	if ev.UnicodeChar != 0 {
 		return v.spec.ChordToken + " " + string(ev.UnicodeChar)
 	}
 	return ""
+}
+
+// ctrlAtom maps a Ctrl+letter key code to its canonical "C-x" chord step.
+// Returns "" for anything that isn't a Ctrl-letter. Tab/Enter/Backspace
+// share code points with Ctrl-I/M/H at the byte level but have distinct
+// key codes handled by specialAtom first, so they never reach here.
+func ctrlAtom(code uint16) string {
+	if l, ok := ctrlLetters[code]; ok {
+		return "C-" + string(l)
+	}
+	return ""
+}
+
+var ctrlLetters = map[uint16]rune{
+	consts.KbCtrlA: 'a', consts.KbCtrlB: 'b', consts.KbCtrlC: 'c',
+	consts.KbCtrlD: 'd', consts.KbCtrlE: 'e', consts.KbCtrlF: 'f',
+	consts.KbCtrlG: 'g', consts.KbCtrlH: 'h', consts.KbCtrlI: 'i',
+	consts.KbCtrlJ: 'j', consts.KbCtrlK: 'k', consts.KbCtrlL: 'l',
+	consts.KbCtrlM: 'm', consts.KbCtrlN: 'n', consts.KbCtrlO: 'o',
+	consts.KbCtrlP: 'p', consts.KbCtrlQ: 'q', consts.KbCtrlR: 'r',
+	consts.KbCtrlS: 's', consts.KbCtrlT: 't', consts.KbCtrlU: 'u',
+	consts.KbCtrlV: 'v', consts.KbCtrlW: 'w', consts.KbCtrlX: 'x',
+	consts.KbCtrlY: 'y', consts.KbCtrlZ: 'z',
 }
 
 // specialAtom maps fv-go key codes to canonical chord-step names. We

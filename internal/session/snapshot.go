@@ -14,7 +14,14 @@ import (
 // ~/.config/fvmux/sessions/<name>.toml. It captures every window's
 // position, title, and layout (encoded via internal/layout/serde) so a
 // later run with -session=<name> can restore the same workspace.
+// SnapshotVersion is the current session schema version, stamped into
+// every saved Snapshot. Loading a snapshot from a newer version is
+// best-effort (unknown fields are ignored); the app layer warns on a
+// forward version. No migration is performed — fvmux is pre-alpha.
+const SnapshotVersion = 1
+
 type Snapshot struct {
+	Version int               `toml:"version"`
 	Name    string            `toml:"name"`
 	Created time.Time         `toml:"created"`
 	Active  int               `toml:"active"`
@@ -29,13 +36,21 @@ type Snapshot struct {
 }
 
 // WindowSnapshot is one window inside a Snapshot.
+//
+// FocusIndex / Zoomed index into the window's leaves in CollectLeaves
+// order (which the layout serde preserves). Their encodings are chosen
+// so a zero value restores the old default: FocusIndex 0 = first leaf,
+// Zoomed 0 = not zoomed (a zoomed pane is stored 1-based).
 type WindowSnapshot struct {
-	ID        uint64   `toml:"id"`
-	Number    int      `toml:"number"`
-	Title     string   `toml:"title"`      // profile-derived fallback caption.
-	UserTitle string   `toml:"user_title"` // sticky user-set name; empty = none.
-	Pos       RectTOML `toml:"pos"`
-	Layout    string   `toml:"layout"` // see internal/layout/serde for grammar
+	ID         uint64   `toml:"id"`
+	Number     int      `toml:"number"`
+	Title      string   `toml:"title"`      // profile-derived fallback caption.
+	UserTitle  string   `toml:"user_title"` // sticky user-set name; empty = none.
+	Pos        RectTOML `toml:"pos"`
+	Layout     string   `toml:"layout"`      // see internal/layout/serde for grammar
+	FocusIndex int      `toml:"focus_index"` // 0-based focused-leaf index.
+	Zoomed     int      `toml:"zoomed"`      // 0 = none; otherwise 1-based leaf index.
+	SyncInput  bool     `toml:"sync_input"`  // broadcast-typing mode.
 }
 
 // RectTOML is geom.Rect spelt with explicit x/y/w/h keys for clarity

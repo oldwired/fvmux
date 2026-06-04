@@ -54,6 +54,7 @@ host  = "elsewhere.example"
 	prod := findHost(hosts, "prod")
 	if prod == nil {
 		t.Fatal("missing 'prod' entry")
+		return
 	}
 	if prod.User != "deploy" || prod.Hostname != "prod.example" || prod.Port != "2222" {
 		t.Errorf("prod fields wrong: %+v", prod)

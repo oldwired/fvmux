@@ -169,6 +169,12 @@ From inside fvmux, `Ctrl-G D` (or **File → Detach from tmux** in the
 menu / the command palette) triggers detach. The command is greyed out
 when fvmux isn't running inside tmux.
 
+An external `SIGTERM` / `SIGHUP` / `SIGINT` (e.g. `kill`, or the
+terminal closing) is caught and turned into a graceful shutdown: the
+session is saved and ControlMaster children are reaped via the normal
+quit path, rather than fvmux being killed mid-flight. A second signal
+forces an immediate exit if the event loop is wedged.
+
 ---
 
 ## Quick start
@@ -275,7 +281,8 @@ Even-V, Main-H, Main-V, Tiled).
 Inside the SFTP browser:
 - **Tab** switches focus between remote (top) and local (bottom) trees.
 - **F5 / F6** copy the focused tree's current file to the other panel's cwd.
-- **Del** cancels the most recent in-flight transfer.
+- **Del** cancels the most recent in-flight transfer (cooperatively, at
+  the next chunk boundary).
 - **Esc** closes the browser.
 
 ### Meta
@@ -412,20 +419,29 @@ launched with `-session=NAME`. Restart with the same flag to restore,
 or use `Ctrl-G s` (lowercase) to open the picker over every saved
 session at any time.
 
+A restored session brings back each window's geometry, title, split
+layout, **which pane was focused**, **whether it was zoomed**, and
+**sync-input mode** — not just the bare tree. Open SFTP browsers are
+re-opened too (polling for the ControlMaster, auth-aware).
+
 The layout DSL is compact and human-readable:
 
 ```toml
+version = 1
 name    = "work"
 created = 2026-05-13T12:00:00Z
 active  = 1
 
 [[window]]
-id         = 1
-number     = 1
-title      = "edit"
-user_title = "vim"          # sticky from Ctrl-G ,
-pos        = { x = 0, y = 0, w = 120, h = 40 }
-layout     = 'split-v:0.500{leaf:profile=shell}{split-h:0.500{leaf:profile=shell}{leaf:profile=shell}}'
+id          = 1
+number      = 1
+title       = "edit"
+user_title  = "vim"          # sticky from Ctrl-G ,
+pos         = { x = 0, y = 0, w = 120, h = 40 }
+layout      = 'split-v:0.5{leaf:profile=shell}{split-h:0.5{leaf:profile=shell}{leaf:profile=shell}}'
+focus_index = 1              # 0-based leaf, in layout order
+zoomed      = 0              # 0 = not zoomed; otherwise 1-based leaf index
+sync_input  = false
 ```
 
 ---
@@ -484,7 +500,8 @@ patched to the chosen name, then drops you in the editor.
 ### Connections
 
 **`Ctrl-G H`** opens a fuzzy picker over `~/.ssh/config` Host entries
-merged with `hosts.toml`. Pick one → fvmux warms a ControlMaster
+(including any pulled in via `Include` directives) merged with
+`hosts.toml`. Pick one → fvmux warms a ControlMaster
 (`ssh -M -N -o ControlPersist=600`) for that alias, then spawns the
 interactive session through it. Subsequent connects to the same alias
 skip re-authentication.
@@ -527,16 +544,28 @@ Key map inside the browser:
   listing → local tree → local listing → …).
 - **F5 / F6** — copy the file highlighted in the focused listing to
   the other side's current folder. Direction is derived from which
-  side has focus.
-- **Del** — cancel the most recent in-flight transfer.
+  side has focus. If the destination already exists you're asked to
+  confirm before it's overwritten.
+- **Del** — cancel the most recent in-flight transfer. Cancellation is
+  cooperative: it takes effect at the next chunk boundary, so a
+  transfer wedged on a stalled link only aborts once the link errors
+  out (or the browser closes, which tears the connection down).
 - **Esc / Close** — dismiss the browser.
 
 Transfers run as goroutines updating an atomic byte counter; the
 TaskProgress widget is rebuilt from a snapshot every 200 ms by the
 anim loop, so the renderer and the goroutine never share mutable
-widget state. The SFTP session itself piggy-backs on the alias's
-ControlMaster (`ssh -S socket -s alias sftp`) so opening the browser
-to a host you're already connected to skips auth.
+widget state. Each transfer writes to a `.part-fvmux` temp file and
+renames it over the destination only on success, so a failed or
+cancelled transfer never leaves a truncated file behind and an
+existing destination survives an interrupted copy. Remote directory
+listings refresh off the UI goroutine, so a slow link can't freeze
+the rest of fvmux. Closing the browser drains in-flight transfers and
+listing reads before closing the SFTP client (which is not safe to
+use concurrently with its own Close). The SFTP session itself
+piggy-backs on the alias's ControlMaster (`ssh -S socket -s alias
+sftp`) so opening the browser to a host you're already connected to
+skips auth.
 
 The classification rules live in
 [`internal/sftp/binary.go`](internal/sftp/binary.go) — extension
@@ -608,7 +637,7 @@ internal/
 ├── logs/                  slog file sink + ring buffer for the log viewer.
 ├── sysmon/                CPU + RAM sampling (gopsutil) for the status bar.
 ├── whimsy/                Easter-egg predicates and filters.
-└── keys/                  Chord parser (used for keybindings.toml + display).
+└── keys/                  Chord parser/canonicaliser (normalises keybindings.toml chords to the registry binding form).
 
 assets/                    SIXEL splash + baked cheatsheet (go generate).
 scripts/                   fvmuxa wrapper + private tmux config.
@@ -709,6 +738,11 @@ What's still rough in v1 alpha — none block daily use:
 - **Move semantics** in the SFTP browser. F5/F6 always copy; there
   is no rename / move primitive yet. Directory copy isn't supported
   either (file-at-a-time only).
+- **Cancelling a network-stalled transfer** isn't instant: cancel is
+  cooperative (checked per chunk), so a transfer hung on a dead link
+  only aborts when the link errors out or the browser closes. A
+  per-transfer hard abort would need a dedicated ssh channel per
+  transfer.
 - **Image preview** uses Go's `image.Decode` with PNG/JPG/GIF support
   via blank imports. WebP / TIFF / BMP would need additional
   decoders; for now they fall back to hex.

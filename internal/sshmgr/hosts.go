@@ -9,6 +9,7 @@
 package sshmgr
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -80,16 +81,20 @@ func loadSSHConfig(path string) ([]*Host, error) {
 	if path == "" {
 		return nil, nil
 	}
-	f, err := os.Open(path)
+	// Gather the main config plus any Include'd files, then decode the
+	// concatenation. kevinburke/ssh_config does not expand Include
+	// directives itself, so users who split their config (Include
+	// ~/.ssh/config.d/*) would otherwise have those hosts vanish from
+	// the picker. Inlining the contents surfaces them; aliases are
+	// deduped by the caller, so any double-counting is harmless.
+	data, err := gatherSSHConfig(path, filepath.Dir(path), map[string]bool{}, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-
-	cfg, err := ssh_config.Decode(f)
+	cfg, err := ssh_config.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +129,81 @@ func loadSSHConfig(path string) ([]*Host, error) {
 	return out, nil
 }
 
+const maxIncludeDepth = 16
+
+// gatherSSHConfig reads path and recursively inlines any Include'd files,
+// returning the concatenated bytes. sshBaseDir is the directory relative
+// Include patterns resolve against (~/.ssh for a user config, matching
+// ssh's own rule). visited guards against include loops; depth caps
+// pathological nesting. A missing included file is skipped (as ssh does);
+// only a missing top-level file (depth 0) surfaces ErrNotExist.
+func gatherSSHConfig(path, sshBaseDir string, visited map[string]bool, depth int) ([]byte, error) {
+	if depth > maxIncludeDepth {
+		return nil, nil
+	}
+	abs, _ := filepath.Abs(path)
+	if visited[abs] {
+		return nil, nil
+	}
+	visited[abs] = true
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if depth == 0 {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	buf.Write(data)
+	buf.WriteByte('\n')
+	for _, pat := range parseIncludes(data) {
+		for _, f := range expandIncludePattern(pat, sshBaseDir) {
+			if more, _ := gatherSSHConfig(f, sshBaseDir, visited, depth+1); len(more) > 0 {
+				buf.Write(more)
+				buf.WriteByte('\n')
+			}
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// parseIncludes returns every whitespace-separated token following an
+// Include keyword across the config text. Surrounding quotes are trimmed.
+func parseIncludes(data []byte) []string {
+	var out []string
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.EqualFold(fields[0], "Include") {
+			continue
+		}
+		for _, tok := range fields[1:] {
+			out = append(out, strings.Trim(tok, `"'`))
+		}
+	}
+	return out
+}
+
+// expandIncludePattern resolves ~ and relative paths (against sshBaseDir)
+// then glob-expands the pattern into concrete file paths.
+func expandIncludePattern(pat, sshBaseDir string) []string {
+	if strings.HasPrefix(pat, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			pat = filepath.Join(home, pat[2:])
+		}
+	}
+	if !filepath.IsAbs(pat) {
+		pat = filepath.Join(sshBaseDir, pat)
+	}
+	matches, _ := filepath.Glob(pat)
+	return matches
+}
+
 // HostsFile is the on-disk schema for hosts.toml.
 type HostsFile struct {
 	Hosts []hostTOML `toml:"host"`
@@ -154,13 +234,24 @@ func loadHostsTOML(path string) ([]*Host, error) {
 		return nil, err
 	}
 	out := make([]*Host, 0, len(hf.Hosts))
+	seen := map[string]bool{}
 	for _, h := range hf.Hosts {
-		port := strconv.Itoa(h.Port)
-		if h.Port == 0 {
-			port = "22"
+		alias := strings.TrimSpace(h.Alias)
+		if alias == "" {
+			continue // an entry with no alias is unusable; skip it.
+		}
+		if seen[alias] {
+			continue // intra-file duplicate: first definition wins.
+		}
+		seen[alias] = true
+		// Default to 22; reject out-of-range ports rather than emitting a
+		// bogus "-5"/"99999" the ssh subprocess would choke on.
+		port := "22"
+		if h.Port > 0 && h.Port <= 65535 {
+			port = strconv.Itoa(h.Port)
 		}
 		out = append(out, &Host{
-			Alias:    h.Alias,
+			Alias:    alias,
 			User:     h.User,
 			Hostname: h.Host,
 			Port:     port,

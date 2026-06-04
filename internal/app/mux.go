@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
@@ -140,6 +141,7 @@ type Mux struct {
 
 	flashUntil time.Time // Ctrl-G q numbers overlay deadline.
 	flashText  string
+	flashPrio  int // priority of the current flash; see setFlash.
 
 	tickerStop chan struct{}
 
@@ -153,6 +155,11 @@ type Mux struct {
 	eggTimers []*time.Timer // pending easter-egg AfterFunc handles.
 
 	sftpRestore sftpRestoreTracker
+
+	// signalQuit is set by the OS-signal handler so OnQuitRequested skips
+	// the interactive confirm-kill prompt (a modal is impossible during
+	// signal-driven shutdown) and goes straight to save-and-exit.
+	signalQuit atomic.Bool
 }
 
 // NewMux builds a Mux around the given Application, registry, and options.
@@ -166,6 +173,10 @@ func NewMux(a *fvapp.Application, reg *commands.Registry, opts Options) *Mux {
 	if len(opts.Themes) == 0 {
 		opts.Themes = muxtheme.All(opts.Paths.ThemesDir())
 	}
+	// Reap stale ControlMaster sockets left behind by a crashed prior
+	// run before standing up the pool (safe: only dead sockets are
+	// removed; live masters shared with other instances are untouched).
+	sshmgr.SweepStale(opts.Paths.ControlSocketDir())
 	m := &Mux{
 		App:     a,
 		Reg:     reg,
@@ -535,20 +546,47 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	return w, nil
 }
 
+// Flash priorities for the shared status-bar slot. Higher wins: a
+// still-active higher-priority flash is not cut short by a lower one.
+const (
+	flashPrioNumbers = 1 // Ctrl-G q window-number overlay.
+	flashPrioShipIt  = 2 // Friday "ship it" whimsy — protected from the overlay.
+)
+
+// setFlash writes the shared status-bar flash slot. It refuses to
+// overwrite a flash that is still on screen with one of lower priority,
+// so the brief Ctrl-G q number overlay can't prematurely wipe the Friday
+// "ship it" moment. Equal-or-higher priority (or an expired slot) wins.
+func (m *Mux) setFlash(text string, d time.Duration, prio int) {
+	if time.Now().Before(m.flashUntil) && prio < m.flashPrio {
+		return
+	}
+	m.flashText = text
+	m.flashUntil = time.Now().Add(d)
+	m.flashPrio = prio
+}
+
 // fridayShipIt flashes "ship it" in the status-bar focused-pane slot
-// for 4 s when a new window opens on a Friday after 17:00. Uses the
-// same flashUntil/flashText slot that Ctrl-G q drives for window
-// numbers — they'd only collide if both fire within 4 s.
+// for 4 s when a new window opens on a Friday after 17:00.
 func (m *Mux) fridayShipIt() {
 	if !whimsy.FridayAfterFive(time.Now()) {
 		return
 	}
-	m.flashText = "ship it"
-	m.flashUntil = time.Now().Add(4 * time.Second)
+	m.setFlash("ship it", 4*time.Second, flashPrioShipIt)
 }
 
 func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 	t := pane.Term
+	// Install the rot13 output filter once, before the terminal starts —
+	// it's a no-op until the :rot13 egg flips pane.Rot13. Toggling an
+	// atomic is race-free with the read loop; swapping OnFeed on a live
+	// terminal would not be (there's no thread-safe setter upstream).
+	t.OnFeed = func(in []byte) []byte {
+		if pane.Rot13.Load() {
+			return whimsy.Rot13(in)
+		}
+		return in
+	}
 	t.OnTitle = func(s string) {
 		if s == "" {
 			return
@@ -570,16 +608,11 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 		pane.Dead = true
 		pane.ExitErr = err
 		if pane.CloseOnExit {
-			// fv-go now marshals terminal callbacks onto the UI
-			// goroutine, so calling AutoClosePane directly would be
-			// safe. Routing through CmdAutoClosePane is kept so the
-			// behaviour is observable in the command registry and
-			// the close path is identical to a user-initiated kill.
-			m.App.PostEvent(drivers.Event{
-				What:    consts.EvCommand,
-				Command: commands.CmdAutoClosePane,
-				InfoPtr: pane,
-			})
+			// fv-go marshals terminal callbacks onto the UI goroutine, so
+			// close directly. Bouncing through a posted command only
+			// deferred the close to a later loop iteration, widening the
+			// race window against a concurrent user-initiated close.
+			m.AutoClosePane(pane)
 		}
 	}
 }
@@ -729,11 +762,13 @@ func (m *Mux) RunFirstRunWizard() {
 	}
 	// Mark first-run as done — persists across restarts. The caller
 	// may already have set this; SaveState is cheap and idempotent.
-	state, _ := config.LoadState(m.Opts.Paths.StateFile())
-	state.FirstRunDone = true
-	state.LastVersion = m.Opts.Version
-	state.WelcomeShownAt = time.Now()
-	_ = config.SaveState(m.Opts.Paths.StateFile(), state)
+	_ = config.WithStateLock(m.Opts.Paths.StateFile(), func() error {
+		state, _ := config.LoadState(m.Opts.Paths.StateFile())
+		state.FirstRunDone = true
+		state.LastVersion = m.Opts.Version
+		state.WelcomeShownAt = time.Now()
+		return config.SaveState(m.Opts.Paths.StateFile(), state)
+	})
 }
 
 // resetFirstRunWizard is the Help → Reset First-Run action: confirms,

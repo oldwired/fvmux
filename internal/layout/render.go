@@ -55,7 +55,17 @@ func splitPosFor(bounds geom.Rect, orient views.SplitOrientation, ratio float64)
 		total = bounds.Height()
 	}
 	if total < 4 {
-		return total / 2
+		// Too small for the usual ≥2 margins. Keep both sides
+		// non-negative: left width = pos, right width = total-pos-1, so
+		// pos must stay in [0, total-1].
+		pos := total / 2
+		if pos > total-1 {
+			pos = total - 1
+		}
+		if pos < 0 {
+			pos = 0
+		}
+		return pos
 	}
 	pos := int(ratio * float64(total))
 	if pos < 2 {
@@ -67,13 +77,32 @@ func splitPosFor(bounds geom.Rect, orient views.SplitOrientation, ratio float64)
 	return pos
 }
 
+// childRects splits bounds at splitPos, leaving a one-cell gap for the
+// splitter. The split coordinate is clamped inside bounds so a degenerate
+// splitPos can never produce a negative-width child rect (it collapses to
+// zero width instead) — FocusDir / mouse hit-testing then simply can't
+// match that pane, rather than indexing a malformed rect.
 func childRects(bounds geom.Rect, orient views.SplitOrientation, splitPos int) (geom.Rect, geom.Rect) {
 	if orient == views.SplitVertical {
-		return geom.NewRect(bounds.A.X, bounds.A.Y, bounds.A.X+splitPos, bounds.B.Y),
-			geom.NewRect(bounds.A.X+splitPos+1, bounds.A.Y, bounds.B.X, bounds.B.Y)
+		mid := clampInt(bounds.A.X+splitPos, bounds.A.X, bounds.B.X)
+		rstart := clampInt(mid+1, bounds.A.X, bounds.B.X)
+		return geom.NewRect(bounds.A.X, bounds.A.Y, mid, bounds.B.Y),
+			geom.NewRect(rstart, bounds.A.Y, bounds.B.X, bounds.B.Y)
 	}
-	return geom.NewRect(bounds.A.X, bounds.A.Y, bounds.B.X, bounds.A.Y+splitPos),
-		geom.NewRect(bounds.A.X, bounds.A.Y+splitPos+1, bounds.B.X, bounds.B.Y)
+	mid := clampInt(bounds.A.Y+splitPos, bounds.A.Y, bounds.B.Y)
+	rstart := clampInt(mid+1, bounds.A.Y, bounds.B.Y)
+	return geom.NewRect(bounds.A.X, bounds.A.Y, bounds.B.X, mid),
+		geom.NewRect(bounds.A.X, rstart, bounds.B.X, bounds.B.Y)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // detach removes v from its current parent group, if any. Safe to call

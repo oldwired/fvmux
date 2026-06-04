@@ -73,7 +73,7 @@ func editMenu(reg *commands.Registry) *fvmenus.Menu {
 		sep(),
 		item(reg, commands.CmdToggleSyncInput),
 		sep(),
-		sub("Send ~S~ignal",
+		sub("Send Si~g~nal",
 			item(reg, commands.CmdSendSIGINT),
 			item(reg, commands.CmdSendSIGQUIT),
 			item(reg, commands.CmdSendEOF),

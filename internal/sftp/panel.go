@@ -5,6 +5,9 @@
 package sftp
 
 import (
+	"sync"
+	"sync/atomic"
+
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
@@ -30,6 +33,19 @@ type panel struct {
 	width  int                 // header column width, for path truncation
 
 	preview *previewPane
+
+	// Async remote-listing refresh coordination (remote panels only).
+	// closed and refreshWG are shared with the owning browser so its
+	// teardown can stop new reads and wait for in-flight ones to drain
+	// before closing the SFTP client. refMu guards the single-worker
+	// latest-request-wins state below.
+	closed    *atomic.Bool
+	refreshWG *sync.WaitGroup
+
+	refMu      sync.Mutex
+	refRunning bool
+	refPending bool
+	refWantCwd string
 }
 
 // newPanel builds tree + listing for one side, inserts them into d,
@@ -79,35 +95,105 @@ func newPanel(
 
 // setCwd updates this panel's current folder, rebuilds the listing,
 // and refreshes the header. Tree expansion state is left intact —
-// the user keeps whatever they had unfolded.
+// the user keeps whatever they had unfolded. The header updates
+// immediately for instant feedback; the remote listing arrives a beat
+// later via the async refresh (so a slow link can't freeze the UI).
 func (p *panel) setCwd(newCwd string) {
 	if newCwd == "" || newCwd == p.cwd {
 		return
 	}
 	p.cwd = newCwd
+	p.refreshHeader()
 	if p.isRemote {
-		p.listing.SetRoots(buildRemoteListing(p.c, newCwd))
+		p.requestRemoteRefresh(newCwd)
 	} else {
 		p.listing.SetRoots(buildLocalListing(newCwd))
 	}
-	p.refreshHeader()
 	views.MarkDirty()
 }
 
 // refresh re-reads the panel's current folder and rebuilds the listing
 // in place. Called after a transfer completes against this side, and
 // from the manual Refresh button / Ctrl-R hotkey. Header/cwd are
-// unchanged; tree expansion state is preserved.
+// unchanged; tree expansion state is preserved. The remote read runs
+// off the UI goroutine; local reads stay synchronous (the local FS
+// doesn't block, and async would only add stale-ordering risk).
 func (p *panel) refresh() {
 	if p.listing == nil {
 		return
 	}
 	if p.isRemote {
-		p.listing.SetRoots(buildRemoteListing(p.c, p.cwd))
+		p.requestRemoteRefresh(p.cwd)
 	} else {
 		p.listing.SetRoots(buildLocalListing(p.cwd))
+		views.MarkDirty()
 	}
-	views.MarkDirty()
+}
+
+// requestRemoteRefresh schedules an off-thread reload of cwd's remote
+// listing. At most one network read runs at a time; a request arriving
+// while one is in flight records the newest cwd and reruns when the
+// current read finishes (latest-request-wins), so rapid navigation never
+// strands the listing on a stale folder. A no-op once the browser is
+// closing.
+func (p *panel) requestRemoteRefresh(cwd string) {
+	if p.closed != nil && p.closed.Load() {
+		return
+	}
+	p.refMu.Lock()
+	p.refWantCwd = cwd
+	if p.refRunning {
+		p.refPending = true
+		p.refMu.Unlock()
+		return
+	}
+	p.refRunning = true
+	p.refMu.Unlock()
+
+	if p.refreshWG != nil {
+		p.refreshWG.Add(1) // gates the browser's client.Close on teardown.
+	}
+	go p.remoteRefreshLoop()
+}
+
+func (p *panel) remoteRefreshLoop() {
+	if p.refreshWG != nil {
+		defer p.refreshWG.Done()
+	}
+	for {
+		if p.closed != nil && p.closed.Load() {
+			p.refMu.Lock()
+			p.refRunning = false
+			p.refMu.Unlock()
+			return
+		}
+		p.refMu.Lock()
+		cwd := p.refWantCwd
+		p.refPending = false
+		p.refMu.Unlock()
+
+		roots := buildRemoteListing(p.c, cwd) // network read, off the UI goroutine.
+		views.CallSoon(func() {
+			// Drop the result if the browser closed or the user navigated
+			// away while the read was in flight.
+			if p.closed != nil && p.closed.Load() {
+				return
+			}
+			if p.cwd != cwd {
+				return
+			}
+			p.listing.SetRoots(roots)
+			views.MarkDirty()
+		})
+
+		p.refMu.Lock()
+		if !p.refPending {
+			p.refRunning = false
+			p.refMu.Unlock()
+			return
+		}
+		p.refMu.Unlock()
+	}
 }
 
 // onTreeSelect: highlighting a folder in the tree snaps the listing

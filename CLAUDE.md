@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current repo state
 
-This repo is **pre-bootstrap**. The only file present is `implementation-plan.md` — there is no `go.mod`, no source tree, no Makefile yet. Stage 0 (the upstream `fv-go` prerequisites) is complete and verified; the next concrete action is to bootstrap the Go module against a tagged `fv-go` release. Treat `implementation-plan.md` as the authoritative spec — read the section relevant to whatever you are about to build before writing code, because it pins decisions (prefix key, config format, layout algebra, command-registry design) that later files must conform to.
+The v1 multiplexer is **implemented** — ~15k LOC of Go across `cmd/fvmux/` and `internal/*` (app, layout, commands, config, sshmgr, sftp, prefix, session, menus, palette, statusbar, theme, splash, …), with unit tests per package plus golden-frame integration tests under `test/headless/`. It builds and `go test ./...` is green. `implementation-plan.md` remains the authoritative design spec — read the relevant section before changing a subsystem, because it pins the cross-cutting decisions (prefix key, config format, layout algebra, command-registry design) that the code conforms to. When the plan and the code disagree, the code is newer; reconcile rather than blindly following either.
 
 ## Project: fvmux
 
@@ -89,6 +89,6 @@ Smoke tests under `test/smoke/*.sh` target real terminals (kitty, ghostty, alacr
 
 - **Bell debounce ≥ 500ms** between consecutive `OnBell` flashes — the upstream callback is already debounced for activity but bell-flash strobing is a UX hazard the plan calls out explicitly.
 
-- **SIGINT routing**: the plan's tentative default is to forward `SIGINT` to the focused pane's PTY (write `0x03`), with `Ctrl-G Ctrl-C Ctrl-C` to actually quit fvmux. Implement in `internal/app/signals.go`.
+- **SIGINT / signals**: `Ctrl-G Ctrl-C` forwards `SIGINT` to the focused pane's PTY (writes `0x03`); the once-mooted `Ctrl-G Ctrl-C Ctrl-C` quit chord was dropped (overloading the universal interrupt with "kill the whole multiplexer" is a footgun, and explicit Quit already exists). `internal/app/signals.go` also installs an OS-signal handler: SIGTERM/SIGHUP/SIGINT trigger a graceful, session-saving shutdown via the normal `OnQuitRequest` path (a second signal hard-exits if the loop is wedged). SIGWINCH is handled by the fv-go backend, not here.
 
 - **Whimsy budget is capped** — see the plan's "Whimsy budget" section. Splash, named themes with taglines, and a small itemized easter-egg list are in scope; everything else stays quiet and professional.
