@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -73,17 +74,42 @@ func Load(path string) ([]*Profile, error) {
 }
 
 // Defaults returns the baked-in profile list: just a "shell" profile
-// that runs $SHELL (or /bin/sh).
+// that runs $SHELL (or the platform fallback).
 func Defaults() []*Profile {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
-		shell = "/bin/sh"
+		shell = FallbackShell()
 	}
 	return []*Profile{{
 		Name:    "shell",
 		Command: shell,
 		CWD:     "~",
 	}}
+}
+
+// FallbackShell is the last resort of the shell-resolution chain
+// (profile → config → $SHELL → this). /bin/sh does not exist on
+// Windows — a supported target — so honour %COMSPEC% there and fall
+// back to cmd.exe.
+func FallbackShell() string {
+	if runtime.GOOS == "windows" {
+		if cs := os.Getenv("COMSPEC"); cs != "" {
+			return cs
+		}
+		return "cmd.exe"
+	}
+	return "/bin/sh"
+}
+
+// ShellCommand returns the system-shell invocation that runs cmdline as
+// a single shell command: "/bin/sh -c cmdline", or "%COMSPEC% /c
+// cmdline" on Windows. Used for config values documented as being
+// interpreted by the shell (new_window_command).
+func ShellCommand(cmdline string) (name string, args []string) {
+	if runtime.GOOS == "windows" {
+		return FallbackShell(), []string{"/c", cmdline}
+	}
+	return "/bin/sh", []string{"-c", cmdline}
 }
 
 // Find returns the profile with the given name, or nil.
@@ -116,11 +142,7 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShe
 	if p.CWD != "" {
 		t.SetWorkingDir(expandPath(p.CWD))
 	}
-	if len(p.Env) > 0 {
-		env := os.Environ()
-		for k, v := range p.Env {
-			env = append(env, fmt.Sprintf("%s=%s", k, expandPath(v)))
-		}
+	if env := spawnEnv(p.Env); env != nil {
 		t.SetEnv(env)
 	}
 	cmd := p.Command
@@ -131,7 +153,7 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShe
 		cmd = os.Getenv("SHELL")
 	}
 	if cmd == "" {
-		cmd = "/bin/sh"
+		cmd = FallbackShell()
 	}
 	if err := t.Start(cmd, p.Args, nil); err != nil {
 		return nil, err
@@ -147,6 +169,27 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShe
 		Profile:     p.Name,
 		CloseOnExit: p.CloseOnExit,
 	}, nil
+}
+
+// spawnEnv builds the child environment for a profile that defines env
+// vars; nil when it defines none (fv-go then applies its own TERM
+// patch). fv-go's Terminal.Start patches TERM=xterm-256color only when
+// it resolves a nil env; supplying any profile var suppresses that, so
+// the same patch is re-applied here — otherwise the child inherits the
+// outer TERM (tmux-256color under tmux) while talking to fv-go's xterm
+// emulator, garbling full-screen apps. The patch is appended before the
+// profile's own vars so an explicit TERM in profiles.toml still wins
+// (exec keeps the last duplicate — the same contract fv-go's own patch
+// relies on).
+func spawnEnv(profileEnv map[string]string) []string {
+	if len(profileEnv) == 0 {
+		return nil
+	}
+	env := append(os.Environ(), "TERM=xterm-256color")
+	for k, v := range profileEnv {
+		env = append(env, fmt.Sprintf("%s=%s", k, expandPath(v)))
+	}
+	return env
 }
 
 // expandPath expands a leading "~" to $HOME and $VAR / ${VAR} forms.

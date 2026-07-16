@@ -40,7 +40,12 @@ func marshalNode(n *PaneNode, b *strings.Builder) {
 		b.WriteString("leaf:")
 		if n.Pane != nil && n.Pane.Profile != "" {
 			b.WriteString("profile=")
-			b.WriteString(n.Pane.Profile)
+			// Profile names are arbitrary user strings from
+			// profiles.toml (or ssh host aliases); quote whenever the
+			// grammar's delimiters appear so the emitted layout always
+			// re-parses. Bare form kept for plain names — it's what
+			// existing session files contain.
+			b.WriteString(quoteIfNeeded(n.Pane.Profile))
 		} else {
 			// A profile-less (ad-hoc) pane has no spawn template to
 			// reconstruct, so it reloads as the default shell. Explicit
@@ -116,6 +121,12 @@ func (p *parser) parseLeaf() (*PaneNode, error) {
 		key, err := p.readUntil(func(r byte) bool { return r == '=' })
 		if err != nil {
 			return nil, err
+		}
+		if p.peek() != '=' {
+			// readUntil ran off the end of the input — advancing pos
+			// past len(src) here used to make the next slice panic on
+			// truncated/hand-edited layouts instead of erroring.
+			return nil, fmt.Errorf("layout: expected '=' after %q at offset %d", key, p.pos)
 		}
 		p.pos++ // consume '='
 		var value string
@@ -235,6 +246,17 @@ func (p *parser) readQString() (string, error) {
 		p.pos++
 	}
 	return "", fmt.Errorf("layout: unterminated quoted string")
+}
+
+// quoteIfNeeded quotes s when it contains grammar delimiters (or a
+// leading quote) that would derail the parser if written bare. The
+// parser accepts a quoted string for any value, so this is symmetric
+// with parseLeaf.
+func quoteIfNeeded(s string) string {
+	if strings.ContainsAny(s, `,{}"\`) {
+		return quote(s)
+	}
+	return s
 }
 
 func quote(s string) string {

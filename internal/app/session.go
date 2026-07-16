@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
@@ -128,15 +129,46 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 		slog.Warn("session snapshot is from a newer fvmux",
 			"file_version", snap.Version, "supported", session.SnapshotVersion)
 	}
-	for _, ws := range snap.Windows {
+	// Restore is per-window best-effort: one un-execable profile must
+	// not take down the other four windows (or, at startup, make
+	// -session exit entirely). Failures are collected and reported once
+	// the event loop is running.
+	var failed []string
+	var activeKey views.View
+	restored := 0
+	for i, ws := range snap.Windows {
 		bounds := geom.NewRect(ws.Pos.X, ws.Pos.Y,
 			ws.Pos.X+ws.Pos.W, ws.Pos.Y+ws.Pos.H)
 		if err := m.openSnapshotWindow(ws, bounds); err != nil {
-			return fmt.Errorf("window %s: %w", ws.Title, err)
+			slog.Warn("session window failed to restore",
+				"window", ws.Title, "err", err)
+			failed = append(failed, fmt.Sprintf("%s: %v", ws.Title, err))
+			continue
+		}
+		restored++
+		if i == snap.Active && len(m.windowOrder) > 0 {
+			activeKey = m.windowOrder[len(m.windowOrder)-1]
 		}
 	}
-	if snap.Active >= 0 && snap.Active < len(m.windowOrder) {
+	if len(snap.Windows) > 0 && restored == 0 {
+		return fmt.Errorf("no window could be restored:\n%s",
+			strings.Join(failed, "\n"))
+	}
+	if activeKey != nil {
+		m.App.Desktop.Focus(activeKey)
+	} else if snap.Active >= 0 && snap.Active < len(m.windowOrder) {
 		m.App.Desktop.Focus(m.windowOrder[snap.Active])
+	}
+	if len(failed) > 0 {
+		// Deferred via CallSoon: at startup LoadSession runs before
+		// a.Run(), where a modal msgbox can't pump events yet.
+		count, total := len(failed), len(snap.Windows)
+		list := strings.Join(failed, "\n")
+		views.CallSoon(func() {
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
+				"%d of %d windows couldn't be restored:\n%s",
+				[]any{count, total, list}, msgbox.OKOnly)
+		})
 	}
 	// SFTP browsers — schedule each. The restored ssh pane (if any)
 	// for the same alias is already up and running; we just poll for
@@ -144,7 +176,6 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	// appears. If auth never completes within the timeout, the browser
 	// silently doesn't open.
 	for _, alias := range snap.SFTPAliases {
-		alias := alias
 		m.scheduleSftpRestore(alias)
 	}
 	return nil
