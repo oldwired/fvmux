@@ -78,6 +78,14 @@ func (m *Mux) tileGrid(ws []*views.Window, cols, rows int) {
 			y1 = desktopH
 		}
 		w.ChangeBounds(geom.NewRect(x0, y0, x1, y1))
+		// fv-go's Window.OnResize only fires from mouse-drag resizes,
+		// never from programmatic ChangeBounds — rerender here or every
+		// pane's click hit-map (Pane.LastRect) keeps pre-tile geometry
+		// and split positions stay GrowMode-stretched instead of
+		// ratio-derived.
+		if state := m.windows[w.Self()]; state != nil {
+			m.rerender(state)
+		}
 	}
 }
 
@@ -101,6 +109,11 @@ func (m *Mux) cascade() {
 		x := safeOffset(off, cols-winW)
 		y := safeOffset(off, rows-winH)
 		w.ChangeBounds(geom.NewRect(x, y, x+winW, y+winH))
+		// Same as tileGrid: programmatic ChangeBounds never fires
+		// OnResize, so resync the hit-map + split ratios ourselves.
+		if state := m.windows[w.Self()]; state != nil {
+			m.rerender(state)
+		}
 	}
 	m.refreshStatusBar()
 }

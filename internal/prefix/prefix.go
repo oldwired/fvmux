@@ -4,7 +4,9 @@
 package prefix
 
 import (
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
@@ -67,6 +69,11 @@ func New(reg *commands.Registry, ctx *commands.Ctx, spec Spec) *View {
 // SetSpec switches which key arms the prefix listener. Used when the
 // user changes prefix_key via the first-run wizard or a reset.
 func (v *View) SetSpec(spec Spec) { v.spec = spec }
+
+// Spec returns the spec the listener currently arms on. Commands that
+// depend on the live prefix (double-tap literal forward) read it at
+// fire time so a rebind is never stale.
+func (v *View) Spec() Spec { return v.spec }
 
 // SetSuspended toggles passthrough mode. While suspended the prefix view
 // ignores (and does not consume) every event, so a sticky sub-mode like
@@ -139,6 +146,11 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 		return
 	}
 	if c.Enabled != nil && !c.Enabled(v.ctx) {
+		// The chord is bound — a currently-disabled command must still
+		// swallow its keystroke. Without this the second key leaks into
+		// the focused pane (e.g. C-g D outside tmux typed a literal 'D'
+		// at the shell prompt).
+		ev.Clear()
 		return
 	}
 	if c.Action != nil {
@@ -211,6 +223,37 @@ var ctrlLetters = map[uint16]rune{
 	consts.KbCtrlS: 's', consts.KbCtrlT: 't', consts.KbCtrlU: 'u',
 	consts.KbCtrlV: 'v', consts.KbCtrlW: 'w', consts.KbCtrlX: 'x',
 	consts.KbCtrlY: 'y', consts.KbCtrlZ: 'z',
+}
+
+// DispatchableChord reports whether chord — in canonical registry form
+// "<prefix> <step>" — can actually be produced by the dispatcher's
+// state machine. chordOf only ever emits a C-letter token, one of the
+// five special atoms (Tab, Esc, Enter, Backspace, Space), or a bare
+// printable character as the second step. Arrow/function/navigation
+// keys and A-/S- modified steps parse fine in keybindings.toml, but a
+// binding to one would silently disarm its command: the factory chord
+// is stripped while the new chord can never fire. Callers reject such
+// bindings with a warning instead of applying them.
+func DispatchableChord(chord string) bool {
+	steps := strings.Fields(chord)
+	if len(steps) != 2 {
+		return false
+	}
+	return dispatchableStep(steps[1])
+}
+
+func dispatchableStep(step string) bool {
+	if utf8.RuneCountInString(step) == 1 {
+		return true // bare printable character (including "-")
+	}
+	switch step {
+	case "Tab", "Esc", "Enter", "Backspace", "Space":
+		return true
+	}
+	if len(step) == 3 && strings.HasPrefix(step, "C-") {
+		return step[2] >= 'a' && step[2] <= 'z'
+	}
+	return false
 }
 
 // specialAtom maps fv-go key codes to canonical chord-step names. We

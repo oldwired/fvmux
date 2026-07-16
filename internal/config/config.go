@@ -5,8 +5,6 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // Config is the parsed contents of ~/.config/fvmux/config.toml.
@@ -107,14 +105,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes cfg back to path as TOML. Used by the first-run wizard
-// to persist the prefix-key choice; other settings are still
-// hand-edited. Atomic write so a crash never leaves config.toml
-// truncated.
-func Save(path string, cfg *Config) error {
-	data, err := toml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return atomicfile.Write(path, data, 0o644)
-}
+// NOTE: there is deliberately no Save(path, *Config). Re-marshaling the
+// struct over config.toml would destroy the seeded template's comments
+// and any keys fvmux doesn't know about. Programmatic persists go
+// through UpdateKeys (update.go), which edits assignments in place.

@@ -23,6 +23,14 @@ func (m *Mux) broadcastIfSync(ev *drivers.Event) {
 	if ev.What != consts.EvKeyDown {
 		return
 	}
+	// Resize mode and copy mode consume their keys via listeners that
+	// sit LATER in the OfPreProcess chain — without this gate their
+	// navigation keys (l/h/j/k, arrows, Esc) would already have been
+	// broadcast into every synced pane by the time they're consumed,
+	// typing stray characters into remote shells.
+	if m.resizeMode || m.copyMode.Active() {
+		return
+	}
 	ws := m.currentWindow()
 	if ws == nil || !ws.SyncInput {
 		return

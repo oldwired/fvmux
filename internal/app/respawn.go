@@ -24,7 +24,11 @@ func (m *Mux) respawnPane() {
 	}
 	prof := profile.Find(m.Opts.Profiles, pane.Profile)
 	if prof == nil {
-		prof = profile.Defaults()[0]
+		// Ad-hoc ssh panes carry the host alias as their Profile name —
+		// resolve through the same fallback session restore uses, so a
+		// respawn reconnects to the host instead of silently spawning a
+		// local shell the user mistakes for the remote machine.
+		prof = m.resolveProfileFallback(pane.Profile)
 	}
 	interior := windowInterior(ws.Frame)
 	newPane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
@@ -38,9 +42,7 @@ func (m *Mux) respawnPane() {
 	m.wireTerminalCallbacks(newPane, ws.Frame)
 	// Release the dead pane's PTY before dropping the reference, so its
 	// file descriptors don't linger until GC.
-	if pane.Term != nil {
-		pane.Term.Stop()
-	}
+	m.stopPane(pane)
 	ws.Focus.Pane = newPane
 	m.rerender(ws)
 }

@@ -134,6 +134,7 @@ type Mux struct {
 	resizeView *prefix.ResizeView
 	syncView   *prefix.SyncView
 	mouseView  *prefix.MouseView
+	copyMode   *copymode.Driver // active copy-mode session, nil/inactive otherwise
 
 	layoutPreset layout.Preset
 
@@ -213,7 +214,18 @@ func (m *Mux) wireActions() {
 		m.openPalette()
 	})
 	bind(commands.CmdCheatsheet, m.ShowCheatsheet)
-	bind(commands.CmdLiteralPrefix, func() { m.LiteralForward(0x07) })
+	bind(commands.CmdLiteralPrefix, func() {
+		// Derive the byte from the live spec — after a rebind to Ctrl-B
+		// the double-tap must forward 0x02, not a hardcoded Ctrl-G/BEL
+		// (which aborts readline edits instead).
+		spec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
+		if m.prefix != nil {
+			spec = m.prefix.Spec()
+		}
+		if b := spec.LiteralByte(); b != 0 {
+			m.LiteralForward(b)
+		}
+	})
 	bind(commands.CmdSplitH, func() { m.doSplit(false) })
 	bind(commands.CmdSplitV, func() { m.doSplit(true) })
 	bind(commands.CmdClosePane, m.doClose)
@@ -233,8 +245,27 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdEditThemes, m.editThemes)
 
 	bind(commands.CmdEnterCopyMode, func() {
-		if t := m.FocusedTerminal(); t != nil {
-			copymode.Show(m.App, t)
+		if m.copyMode.Active() {
+			return // single-instance: never stack a second driver
+		}
+		t := m.FocusedTerminal()
+		if t == nil {
+			return
+		}
+		m.copyMode = copymode.Show(m.App, t)
+		if m.copyMode == nil {
+			return
+		}
+		// Suspend the prefix listener for the mode's duration (same
+		// discipline as resize mode) so chords can't fire — and, e.g.,
+		// kill the very pane copy mode is reading — mid-session.
+		if m.prefix != nil {
+			m.prefix.SetSuspended(true)
+		}
+		m.copyMode.OnDone = func() {
+			if m.prefix != nil {
+				m.prefix.SetSuspended(false)
+			}
 		}
 	})
 	bind(commands.CmdPaste, func() {
@@ -488,7 +519,8 @@ func (m *Mux) showThemePicker() {
 	}
 	themes[idx].Apply()
 	m.Opts.Config.Appearance.Theme = themes[idx].Name
-	_ = config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config)
+	_ = config.UpdateKeys(m.Opts.Paths.ConfigFile(),
+		config.KV{Section: "appearance", Key: "theme", Value: themes[idx].Name})
 }
 
 // NewWindow opens a fresh terminal window. If profileName == "" the
@@ -501,10 +533,11 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	case m.Opts.Config.General.NewWindowCommand != "":
 		// Ad-hoc shell command override; the user wants Ctrl-G c to
 		// run something other than the configured default profile.
+		sh, args := profile.ShellCommand(m.Opts.Config.General.NewWindowCommand)
 		prof = &profile.Profile{
 			Name:    "command",
-			Command: "/bin/sh",
-			Args:    []string{"-c", m.Opts.Config.General.NewWindowCommand},
+			Command: sh,
+			Args:    args,
 		}
 	default:
 		prof = profile.Find(m.Opts.Profiles, m.Opts.Config.General.DefaultProfile)
@@ -632,9 +665,7 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 		if leaf == nil {
 			continue
 		}
-		if leaf.Pane != nil && leaf.Pane.Term != nil {
-			leaf.Pane.Term.Stop()
-		}
+		m.stopPane(leaf.Pane)
 		var removed bool
 		ws.Root, removed = layout.Close(ws.Root, leaf)
 		if removed {
@@ -706,7 +737,8 @@ func (m *Mux) ApplyPrefix(newConfigKey string) {
 		m.prefix.SetSpec(newSpec)
 	}
 	m.Opts.Config.General.PrefixKey = newSpec.ConfigKey
-	if err := config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config); err != nil {
+	if err := config.UpdateKeys(m.Opts.Paths.ConfigFile(),
+		config.KV{Section: "general", Key: "prefix_key", Value: newSpec.ConfigKey}); err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
 			"Couldn't persist prefix change:\n%s",
 			[]any{err.Error()}, msgbox.OKOnly)
@@ -743,19 +775,19 @@ func (m *Mux) RunFirstRunWizard() {
 	if result.PrefixKey != "" {
 		m.ApplyPrefix(result.PrefixKey)
 	}
-	dirty := false
+	var updates []config.KV
 	if result.Shell != "" && result.Shell != currentShell {
 		m.Opts.Config.Terminal.Shell = result.Shell
-		dirty = true
+		updates = append(updates, config.KV{Section: "terminal", Key: "shell", Value: result.Shell})
 	}
 	if result.Theme != "" && result.Theme != m.Opts.Config.Appearance.Theme {
 		m.Opts.Config.Appearance.Theme = result.Theme
-		dirty = true
+		updates = append(updates, config.KV{Section: "appearance", Key: "theme", Value: result.Theme})
 		// PickLive already applied the palette live; nothing extra
 		// to do here beyond persisting the choice.
 	}
-	if dirty {
-		_ = config.Save(m.Opts.Paths.ConfigFile(), m.Opts.Config)
+	if len(updates) > 0 {
+		_ = config.UpdateKeys(m.Opts.Paths.ConfigFile(), updates...)
 	}
 	if result.InstallGlue {
 		m.installGlue()
@@ -836,9 +868,7 @@ func (m *Mux) doClose() {
 		return
 	}
 
-	if target.Pane != nil && target.Pane.Term != nil {
-		target.Pane.Term.Stop()
-	}
+	m.stopPane(target.Pane)
 
 	var removed bool
 	ws.Root, removed = layout.Close(ws.Root, target)
@@ -1065,6 +1095,20 @@ func paneIsAlive(p *session.Pane) bool {
 	return p != nil && !p.Dead
 }
 
+// stopPane stops a pane's terminal, first tearing down copy mode if it
+// is running on that terminal — otherwise the copy-mode driver would
+// stay installed desktop-wide, eating keys on behalf of a stopped pane.
+// Every path that stops a pane's PTY must come through here.
+func (m *Mux) stopPane(pane *session.Pane) {
+	if pane == nil || pane.Term == nil {
+		return
+	}
+	if m.copyMode.Active() && m.copyMode.Term() == pane.Term {
+		m.copyMode.Close()
+	}
+	pane.Term.Stop()
+}
+
 // removeWindow tears down a window from fvmux's side and detaches it
 // from the desktop. Used by command paths that initiate the close
 // themselves (Ctrl-G &, last-pane Close, etc.).
@@ -1086,9 +1130,7 @@ func (m *Mux) cleanupWindow(ws *windowState) {
 	}
 	if ws.Root != nil {
 		ws.Root.Leaves(func(l *layout.PaneNode) {
-			if l.Pane != nil && l.Pane.Term != nil {
-				l.Pane.Term.Stop()
-			}
+			m.stopPane(l.Pane)
 		})
 	}
 	if ws.Frame == nil {

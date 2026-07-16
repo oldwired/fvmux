@@ -34,3 +34,15 @@ func Lookup(configKey string) Spec {
 	}
 	return Default
 }
+
+// LiteralByte is the raw byte the prefix key feeds a terminal
+// (Ctrl-A…Ctrl-Z ⇒ 0x01…0x1a). The double-tap-prefix command forwards
+// this — derived from the live spec, never hardcoded, so rebinding the
+// prefix to Ctrl-B forwards 0x02 rather than a stray BEL. Returns 0
+// when the key code isn't a Ctrl-letter.
+func (s Spec) LiteralByte() byte {
+	if l, ok := ctrlLetters[s.KeyCode]; ok {
+		return byte(l-'a') + 1
+	}
+	return 0
+}

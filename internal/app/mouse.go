@@ -156,10 +156,10 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 	// on clicks that didn't raise anything (empty desktop, same window).
 	defer views.CallSoon(m.raiseMouseListener)
 
-	ws := m.currentWindow()
+	ws := m.windowAtPoint(ev.Where)
 	if ws == nil {
 		if debug.Mouse() {
-			debug.Logf("mouse", "handleMouseDown: no current fvmux window, falling through")
+			debug.Logf("mouse", "handleMouseDown: no fvmux window under cursor, falling through")
 		}
 		return false
 	}
@@ -186,6 +186,13 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		}
 		return false // let the click reach the terminal too.
 	case ev.Buttons&consts.MbRightButton != 0:
+		// The consumed right-click never reaches fv-go's window raise,
+		// so focus the clicked window explicitly — the context-menu
+		// actions dispatch against the *current* window and would
+		// otherwise target the occluded one beneath.
+		if m.currentWindow() != ws {
+			m.App.Desktop.Focus(ws.Frame.Self())
+		}
 		// Bring focus to the right-clicked pane before showing the menu.
 		if leaf != ws.Focus && leaf.Pane != nil {
 			ws.Focus = leaf
@@ -219,11 +226,49 @@ func findLeafAtPoint(ws *windowState, p geom.Point) *layout.PaneNode {
 		if l.Pane == nil {
 			return
 		}
+		// In a zoomed window only the zoomed leaf's LastRect is
+		// refreshed by Materialize; the hidden panes keep stale rects
+		// covering the same area, so a last-match-wins walk could
+		// silently focus an invisible pane (and Ctrl-G x would then
+		// kill a process the user can't see).
+		if ws.Zoomed != nil && l.Pane.ID != *ws.Zoomed {
+			return
+		}
 		if l.Pane.LastRect.Contains(local) {
 			hit = l
 		}
 	})
 	return hit
+}
+
+// windowAtPoint returns the fvmux window whose frame is topmost under
+// p, or nil when p isn't over any fvmux window — including when a
+// dialog (SFTP browser, picker) covers that spot. Click handling must
+// target the window the user sees under the cursor, not the focused
+// window: with overlapping windows those differ, and pane actions
+// would silently hit an occluded pane in the window beneath.
+func (m *Mux) windowAtPoint(p geom.Point) *windowState {
+	desk := &m.App.Desktop.Group
+	for i := len(desk.Children) - 1; i >= 0; i-- {
+		c := desk.Children[i]
+		if c == views.View(m.mouseView) || c == m.App.Desktop.Background {
+			continue
+		}
+		bv := c.BaseView()
+		if bv.Size.X <= 0 || bv.Size.Y <= 0 {
+			continue // invisible OfPreProcess helpers
+		}
+		r := geom.NewRect(bv.Origin.X, bv.Origin.Y,
+			bv.Origin.X+bv.Size.X, bv.Origin.Y+bv.Size.Y)
+		if !r.Contains(p) {
+			continue
+		}
+		if ws := m.windows[c]; ws != nil {
+			return ws
+		}
+		return nil // a dialog or other non-window view owns this point
+	}
+	return nil
 }
 
 // showPaneContextMenu opens a popupmenu at the click position with
