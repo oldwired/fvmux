@@ -137,10 +137,7 @@ func walkRemote(c *pkgsftp.Client, root string, fn func(path string, isDir bool)
 		return err
 	}
 	for _, e := range entries {
-		path := root + "/" + e.Name()
-		if root == "/" {
-			path = "/" + e.Name()
-		}
+		path := joinRemote(root, e.Name())
 		if e.IsDir() {
 			if err := fn(path, true); err != nil {
 				return err

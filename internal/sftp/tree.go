@@ -33,13 +33,9 @@ func buildRemoteTree(s *pkgsftp.Client, cwd string) []*treeview.Node {
 
 	out := make([]*treeview.Node, 0, len(dirs))
 	for _, e := range dirs {
-		path := cwd + "/" + e.Name()
-		if cwd == "/" {
-			path = "/" + e.Name()
-		}
 		out = append(out, &treeview.Node{
 			Label:       e.Name() + "/",
-			Data:        &fileEntry{Path: path, IsDir: true},
+			Data:        &fileEntry{Path: joinRemote(cwd, e.Name()), IsDir: true},
 			HasChildren: true,
 		})
 	}

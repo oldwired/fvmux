@@ -14,6 +14,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/oldwired/fvmux/internal/ring"
 )
 
 // Entry is one structured record. The logviewer widget renders these
@@ -31,9 +33,7 @@ var (
 	initErr error
 
 	mu        sync.Mutex
-	ring      []Entry
-	ringHead  int
-	ringCap   int
+	logRing   *ring.Ring[Entry]
 	sink      io.Writer
 	sinkClose func() error // nil for ring-only init; closes the file sink.
 )
@@ -48,8 +48,7 @@ func Init(path string, ringSize int) error {
 		if ringSize < 16 {
 			ringSize = 16
 		}
-		ringCap = ringSize
-		ring = make([]Entry, 0, ringSize)
+		logRing = ring.New[Entry](ringSize)
 
 		if path != "" {
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -88,14 +87,10 @@ func Close() error {
 func Entries() []Entry {
 	mu.Lock()
 	defer mu.Unlock()
-	out := make([]Entry, 0, len(ring))
-	if len(ring) < ringCap {
-		out = append(out, ring...)
-		return out
+	if logRing == nil {
+		return nil
 	}
-	out = append(out, ring[ringHead:]...)
-	out = append(out, ring[:ringHead]...)
-	return out
+	return logRing.Items()
 }
 
 // handler is our slog.Handler that fans out to ring + file.
@@ -151,12 +146,10 @@ func (h *handler) WithGroup(string) slog.Handler { return h }
 func appendRing(e Entry) {
 	mu.Lock()
 	defer mu.Unlock()
-	if len(ring) < ringCap {
-		ring = append(ring, e)
+	if logRing == nil {
 		return
 	}
-	ring[ringHead] = e
-	ringHead = (ringHead + 1) % ringCap
+	logRing.Push(e)
 }
 
 func levelString(lv slog.Level) string {

@@ -441,7 +441,7 @@ func (m *Mux) openSftpBrowser(alias string) {
 	// d.OnClose.
 	sock := m.sshPool.Acquire(alias)
 	host := m.hostByAlias(alias)
-	err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), func() { m.sshPool.Release(alias) })
+	err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel, func() { m.sshPool.Release(alias) })
 	if err == nil {
 		return
 	}

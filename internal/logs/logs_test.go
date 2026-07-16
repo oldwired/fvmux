@@ -15,9 +15,7 @@ func resetForTest(t *testing.T) {
 	t.Helper()
 	mu.Lock()
 	defer mu.Unlock()
-	ring = nil
-	ringHead = 0
-	ringCap = 0
+	logRing = nil
 	sink = nil
 	sinkClose = nil
 	once = sync.Once{}

@@ -15,6 +15,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/treeview"
 
 	pkgsftp "github.com/pkg/sftp"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // panel bundles tree + listing + cwd for one side (remote or local).
@@ -279,15 +281,7 @@ func (p *panel) refreshHeader() {
 	if max < 4 {
 		max = 4
 	}
-	path := p.cwd
-	if len(path) > max {
-		if max <= 3 {
-			path = path[len(path)-max:]
-		} else {
-			path = "…" + path[len(path)-(max-1):]
-		}
-	}
-	p.header.Text = side + " — " + path
+	p.header.Text = side + " — " + ui.TruncLeftPath(p.cwd, max)
 }
 
 // listingFocused / treeFocused report which view on this side has

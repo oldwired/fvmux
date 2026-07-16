@@ -119,6 +119,12 @@ type Manager struct {
 	// to the shared client (cooperative cancel only).
 	openDedicated func() (dedicatedConn, error)
 
+	// sem bounds how many transfers move their payload at once (see
+	// SetParallel). A folder copy enqueues one transfer per file, so
+	// without this cap a large tree would fan every file onto the single
+	// shared SFTP session simultaneously. nil ⇒ unbounded (no SetParallel).
+	sem chan struct{}
+
 	mu   sync.Mutex
 	list []*Transfer
 	wg   sync.WaitGroup // tracks live run + abort-watcher goroutines.
@@ -135,6 +141,18 @@ type dedicatedConn interface {
 
 // NewManager returns an empty transfer manager bound to alias.
 func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
+
+// SetParallel bounds how many file payloads move concurrently on this
+// manager. config.SFTP.Parallel feeds it (default 1); the browser calls
+// it once, right after NewManager, before any transfer is enqueued. n < 1
+// is treated as 1. Leaving it unset (nil sem) means unbounded, which the
+// tests that don't care about queuing rely on.
+func (m *Manager) SetParallel(n int) {
+	if n < 1 {
+		n = 1
+	}
+	m.sem = make(chan struct{}, n)
+}
 
 // EnableDedicatedTransfers wires StartDedicated to open a real per-transfer
 // ssh subprocess for the manager's alias, reusing controlPath's master.
@@ -373,6 +391,20 @@ func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 	defer m.wg.Done()
 	if t.done != nil {
 		defer close(t.done)
+	}
+	// Concurrency gate: at most Parallel payloads move at once. Queued
+	// transfers block here, before the first byte, rather than flooding
+	// one SFTP session. A cancel while queued (browser teardown, Del)
+	// short-circuits the wait so we don't hold up the drain waiting for a
+	// slot the transfer no longer needs. nil sem ⇒ unbounded.
+	if m.sem != nil {
+		select {
+		case <-t.cancel:
+			t.status.Store(StatusCancelled)
+			return
+		case m.sem <- struct{}{}:
+			defer func() { <-m.sem }()
+		}
 	}
 	err := m.copy(c, t)
 	// A move deletes the source only once the copy fully succeeded. A

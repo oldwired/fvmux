@@ -4,9 +4,6 @@
 // Each action determines the target side from focus, prompts the user
 // (input dialog for names, YesNo for delete), runs the local-FS or
 // SFTP call, and refreshes the affected panel's listing.
-//
-// promptName is local to this package because the sftp package can't
-// import internal/app (the dependency runs the other direction).
 package sftp
 
 import (
@@ -17,9 +14,9 @@ import (
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/consts"
-	"github.com/oldwired/fv-go/pkg/fv/dialogs"
-	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // joinRemote concatenates a POSIX remote directory with a basename,
@@ -48,44 +45,15 @@ func validateBasename(name string) error {
 	return nil
 }
 
-// promptName opens a centered modal InputLine seeded with initial.
-// Returns the entered text + true on OK, or "", false on Cancel/Esc.
-// Mirrors internal/app.promptString — kept in step intentionally; the
-// sftp package can't import internal/app since app already imports
-// sftp (and adding a third package just for one shared helper is more
-// scaffolding than it's worth).
+// promptName wraps the shared ui.PromptString modal and trims the
+// result: SFTP mkdir and move/rename want a clean basename, never one
+// carrying leading or trailing spaces. Returns "", false on Cancel/Esc.
 func promptName(a *fvapp.Application, title, label, initial string) (string, bool) {
-	desk := a.Desktop.BaseView()
-	w, h := 54, 8
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
-
-	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title)
-
-	il := dialogs.NewInputLine(geom.NewRect(2, 4, w-3, 5), 256)
-	il.SetText(initial)
-	d.Insert(dialogs.NewLabel(geom.NewRect(2, 2, w-3, 3), label, il))
-	d.Insert(il)
-
-	d.Insert(dialogs.NewButton(
-		geom.NewRect(w/2-12, h-3, w/2-2, h-2),
-		"O~K~", consts.CmOK, dialogs.BfDefault,
-	))
-	d.Insert(dialogs.NewButton(
-		geom.NewRect(w/2+2, h-3, w/2+12, h-2),
-		"~C~ancel", consts.CmCancel, 0,
-	))
-
-	if a.Desktop.ExecView(d) != consts.CmOK {
+	s, ok := ui.PromptString(a, title, label, initial)
+	if !ok {
 		return "", false
 	}
-	return strings.TrimSpace(il.Text()), true
+	return strings.TrimSpace(s), true
 }
 
 // mkdirAction (F7) creates a new directory under p's current folder.

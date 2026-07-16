@@ -115,7 +115,7 @@ func (m *Mux) scheduleSftpRestore(alias string) {
 			// path, so do NOT Release again here — that would double-count
 			// and drive the alias refcount below its true value.
 			host := m.hostByAlias(alias)
-			if err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), func() { m.sshPool.Release(alias) }); err != nil {
+			if err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel, func() { m.sshPool.Release(alias) }); err != nil {
 				slog.Warn("session restore: sftp browser open failed",
 					"alias", alias, "err", err)
 			}

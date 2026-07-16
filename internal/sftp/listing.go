@@ -7,13 +7,17 @@ package sftp
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/widgets/treeview"
 
 	pkgsftp "github.com/pkg/sftp"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // listingNameW / listingSizeW / listingMtimeW control the per-column
@@ -52,13 +56,9 @@ func buildRemoteListing(s *pkgsftp.Client, cwd string) []*treeview.Node {
 		})
 	}
 	for _, e := range entries {
-		path := cwd + "/" + e.Name()
-		if cwd == "/" {
-			path = "/" + e.Name()
-		}
 		out = append(out, &treeview.Node{
 			Label: formatListingRow(e.Name(), e.IsDir(), e.Size(), e.ModTime()),
-			Data:  &fileEntry{Path: path, IsDir: e.IsDir()},
+			Data:  &fileEntry{Path: joinRemote(cwd, e.Name()), IsDir: e.IsDir()},
 		})
 	}
 	return out
@@ -111,7 +111,7 @@ func formatListingRow(name string, isDir bool, size int64, mtime time.Time) stri
 	if isDir && name != "../" {
 		displayName = name + "/"
 	}
-	displayName = truncRune(displayName, listingNameW)
+	displayName = ui.TruncRight(displayName, listingNameW)
 
 	var sizeStr, mtimeStr string
 	switch {
@@ -165,43 +165,17 @@ func formatMtime(t time.Time) string {
 	return fmt.Sprintf(" %04d", t.Year())
 }
 
-// truncRune cuts s to at most n runes; appends "…" when truncated.
-// Pads-by-spaces is left to the caller's %-*s format.
-func truncRune(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	if n == 1 {
-		return "…"
-	}
-	return string(runes[:n-1]) + "…"
-}
-
-// remoteParent returns the SFTP-side parent of cwd. "/" is its own
-// parent so the caller knows there's no "../" row to emit.
+// remoteParent returns the SFTP-side parent of cwd. "/" (and the empty
+// path) are their own parent so the caller knows there's no "../" row to
+// emit. Trailing slashes are stripped first, so "/a/b/" and "/a/b" share
+// the parent "/a" — bare path.Dir would return "/a/b" for the former.
 func remoteParent(cwd string) string {
 	if cwd == "" || cwd == "/" {
 		return "/"
 	}
-	cleaned := cwd
-	// Strip trailing slashes (except keep "/" itself which we already
-	// handled above).
-	for len(cleaned) > 1 && cleaned[len(cleaned)-1] == '/' {
-		cleaned = cleaned[:len(cleaned)-1]
-	}
-	i := -1
-	for j := len(cleaned) - 1; j >= 0; j-- {
-		if cleaned[j] == '/' {
-			i = j
-			break
-		}
-	}
-	if i <= 0 {
+	parent := path.Dir(strings.TrimRight(cwd, "/"))
+	if parent == "." {
 		return "/"
 	}
-	return cleaned[:i]
+	return parent
 }

@@ -46,14 +46,7 @@ func (m *Mux) joinFrom() {
 
 	items := make([]string, len(cands))
 	for i, c := range cands {
-		title := c.ws.UserTitle
-		if title == "" {
-			title = c.ws.ShellTitle
-		}
-		if title == "" {
-			title = c.ws.Title
-		}
-		items[i] = fmt.Sprintf("%d: %s", c.ws.Number, title)
+		items[i] = fmt.Sprintf("%d: %s", c.ws.Number, c.ws.displayTitle())
 	}
 	desk := m.App.Desktop.BaseView()
 	w, h := 50, 12

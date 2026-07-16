@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/oldwired/fvmux/internal/ring"
 )
 
 func resetForTest(t *testing.T) {
@@ -12,9 +14,7 @@ func resetForTest(t *testing.T) {
 	Stop()
 	mu.Lock()
 	defer mu.Unlock()
-	cpuRing = [historySize]float64{}
-	cpuHead = 0
-	cpuLen = 0
+	cpuRing = ring.New[float64](historySize)
 	ramPct = 0
 	stopCh = nil
 	doneCh = nil
@@ -25,8 +25,8 @@ func TestPush_RingFillThenWrap(t *testing.T) {
 	for i := 0; i < historySize; i++ {
 		push(float64(i) / 10.0)
 	}
-	if cpuLen != historySize {
-		t.Fatalf("cpuLen after fill: got %d want %d", cpuLen, historySize)
+	if cpuRing.Len() != historySize {
+		t.Fatalf("cpuLen after fill: got %d want %d", cpuRing.Len(), historySize)
 	}
 	hist := CPUHistory()
 	if len(hist) != historySize {
@@ -88,13 +88,13 @@ func TestStartStop_Idempotent(t *testing.T) {
 	// After Stop, no further samples should land. Capture current
 	// length, sleep, ensure unchanged.
 	mu.Lock()
-	lenAfter := cpuLen
+	lenAfter := cpuRing.Len()
 	mu.Unlock()
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
-	if cpuLen != lenAfter {
+	if got := cpuRing.Len(); got != lenAfter {
 		mu.Unlock()
-		t.Fatalf("sampler still running after Stop: %d -> %d", lenAfter, cpuLen)
+		t.Fatalf("sampler still running after Stop: %d -> %d", lenAfter, got)
 	}
 	mu.Unlock()
 }

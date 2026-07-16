@@ -123,7 +123,7 @@ func CloseAllBrowsers() {
 // responsible for surfacing the error to the user; ErrAuthRequired
 // in particular should be handled by offering to open an SSH pane
 // rather than just msgbox'ing.
-func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, onClose func()) error {
+func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, parallel int, onClose func()) error {
 	c, err := Open(alias, controlPath, hostOpts)
 	if err != nil {
 		if onClose != nil {
@@ -246,6 +246,7 @@ func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, on
 	// the manager + ticker are registered for the dialog's whole
 	// lifetime and torn down from d.OnClose (set below).
 	mgr := NewManager(alias)
+	mgr.SetParallel(parallel) // cap concurrent file transfers (config.SFTP.Parallel).
 	mgr.SetCloseFn(func() { d.Close() })
 	// Single-file F5/F6 transfers get their own ssh session off the same
 	// ControlMaster, so Del can hard-abort one wedged on a dead link.

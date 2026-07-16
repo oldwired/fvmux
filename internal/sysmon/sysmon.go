@@ -14,15 +14,15 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
+
+	"github.com/oldwired/fvmux/internal/ring"
 )
 
 const historySize = 10
 
 var (
 	mu      sync.Mutex
-	cpuRing [historySize]float64
-	cpuHead int
-	cpuLen  int
+	cpuRing = ring.New[float64](historySize)
 	ramPct  float64
 	stopCh  chan struct{}
 	doneCh  chan struct{} // closed by the sampler goroutine on exit
@@ -87,14 +87,7 @@ func Stop() {
 func CPUHistory() []float64 {
 	mu.Lock()
 	defer mu.Unlock()
-	out := make([]float64, 0, cpuLen)
-	if cpuLen < historySize {
-		out = append(out, cpuRing[:cpuLen]...)
-		return out
-	}
-	out = append(out, cpuRing[cpuHead:]...)
-	out = append(out, cpuRing[:cpuHead]...)
-	return out
+	return cpuRing.Items()
 }
 
 // RAMUsage returns the current RAM utilisation in [0.0, 1.0].
@@ -125,11 +118,5 @@ func push(v float64) {
 	if v > 1 {
 		v = 1
 	}
-	if cpuLen < historySize {
-		cpuRing[cpuLen] = v
-		cpuLen++
-		return
-	}
-	cpuRing[cpuHead] = v
-	cpuHead = (cpuHead + 1) % historySize
+	cpuRing.Push(v)
 }

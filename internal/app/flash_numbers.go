@@ -20,14 +20,7 @@ func (m *Mux) flashNumbers() {
 		if i > 0 {
 			sb.WriteString("  ")
 		}
-		title := ws.UserTitle
-		if title == "" {
-			title = ws.ShellTitle
-		}
-		if title == "" {
-			title = ws.Title
-		}
-		fmt.Fprintf(&sb, "[%d] %s", ws.Number, title)
+		fmt.Fprintf(&sb, "[%d] %s", ws.Number, ws.displayTitle())
 	}
 	if sb.Len() == 0 {
 		return

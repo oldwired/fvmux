@@ -80,14 +80,7 @@ func (m *Mux) showWindowList() {
 		if ws == nil {
 			continue
 		}
-		title := ws.UserTitle
-		if title == "" {
-			title = ws.ShellTitle
-		}
-		if title == "" {
-			title = ws.Title
-		}
-		items = append(items, fmt.Sprintf("%d: %s", ws.Number, title))
+		items = append(items, fmt.Sprintf("%d: %s", ws.Number, ws.displayTitle()))
 		keys = append(keys, key)
 	}
 	desk := m.App.Desktop.BaseView()

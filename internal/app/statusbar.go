@@ -51,13 +51,7 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 		if ws == nil {
 			continue
 		}
-		title := ws.UserTitle
-		if title == "" {
-			title = ws.ShellTitle
-		}
-		if title == "" {
-			title = ws.Title
-		}
+		title := ws.displayTitle()
 		title = whimsy.HomeGlyphFor(title) + title
 		entry := statusbar.WindowEntry{
 			Number:  ws.Number,

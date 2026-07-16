@@ -59,7 +59,7 @@ func (p Paths) WithRoot(root string) Paths {
 func (p Paths) EnsureDirs() error {
 	for _, d := range []string{
 		p.Root,
-		filepath.Join(p.Root, "sessions"),
+		p.SessionsDir(),
 		filepath.Join(p.Root, "themes"),
 		p.StateRoot,
 		filepath.Join(p.StateRoot, "cm"),
@@ -76,6 +76,10 @@ func (p Paths) ProfilesFile() string    { return filepath.Join(p.Root, "profiles
 func (p Paths) KeybindingsFile() string { return filepath.Join(p.Root, "keybindings.toml") }
 func (p Paths) HostsFile() string       { return filepath.Join(p.Root, "hosts.toml") }
 func (p Paths) StateFile() string       { return filepath.Join(p.StateRoot, "state.toml") }
+
+// SessionsDir is the directory holding saved session TOMLs.
+func (p Paths) SessionsDir() string { return filepath.Join(p.Root, "sessions") }
+
 func (p Paths) SessionFile(name string) string {
 	// Defense in depth: a name that fails ValidSessionName (path
 	// separators, "..") is hashed — mirroring ControlSocket — so a
@@ -85,7 +89,7 @@ func (p Paths) SessionFile(name string) string {
 		sum := sha256.Sum256([]byte(name))
 		name = hex.EncodeToString(sum[:8])
 	}
-	return filepath.Join(p.Root, "sessions", name+".toml")
+	return filepath.Join(p.SessionsDir(), name+".toml")
 }
 
 // ValidSessionName rejects session names that can't safely be embedded

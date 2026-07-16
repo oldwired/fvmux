@@ -2,7 +2,6 @@ package app
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
@@ -235,7 +234,7 @@ func (m *Mux) deleteSession() {
 }
 
 func (m *Mux) savedSessionNames() []string {
-	dir := filepath.Join(m.Opts.Paths.Root, "sessions")
+	dir := m.Opts.Paths.SessionsDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil

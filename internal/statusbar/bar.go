@@ -12,6 +12,8 @@ import (
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/menus"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // Bar wraps a *menus.StatusLine and a clock-format. The host (Mux)
@@ -100,7 +102,7 @@ func (b *Bar) formatLeft(s Snapshot) string {
 	}
 	for _, w := range s.Windows {
 		sb.WriteByte(' ')
-		fmt.Fprintf(&sb, "%d:%s", w.Number, escapeStatus(truncate(w.Title, 12)))
+		fmt.Fprintf(&sb, "%d:%s", w.Number, escapeStatus(ui.TruncRight(w.Title, 12)))
 		switch {
 		case w.Bell:
 			sb.WriteByte('!')
@@ -116,7 +118,7 @@ func (b *Bar) formatLeft(s Snapshot) string {
 func (b *Bar) formatRight(s Snapshot) string {
 	var sb strings.Builder
 	if s.FocusedTitle != "" {
-		sb.WriteString(escapeStatus(truncate(s.FocusedTitle, 24)))
+		sb.WriteString(escapeStatus(ui.TruncRight(s.FocusedTitle, 24)))
 		if s.FocusedCWD != "" {
 			sb.WriteString(" ▸ ")
 			sb.WriteString(escapeStatus(filepath.Base(s.FocusedCWD)))
@@ -155,14 +157,4 @@ func escapeStatus(s string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, "~", "")
-}
-
-func truncate(s string, max int) string {
-	if max <= 1 {
-		return s
-	}
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-1] + "…"
 }
