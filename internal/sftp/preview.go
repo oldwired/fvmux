@@ -7,6 +7,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -52,7 +53,22 @@ func BuildPreview(s *pkgsftp.Client, path string, bounds geom.Rect) views.View {
 // only thing that differs between the remote (s.Open) and local (os.Open)
 // entry points. On any open error the result is a MarkdownView "# Error"
 // block so the user sees what went wrong instead of a blank pane.
-func buildPreview(path string, bounds geom.Rect, open func() (io.ReadCloser, error)) views.View {
+//
+// The whole build is panic-isolated: every byte here comes from a file
+// the preview exists to open sight-unseen — on a remote server that's
+// attacker-controllable input by design — and it flows into parsers
+// (image decoders, the markdown renderer) that have had panic bugs
+// before (GO-2026-5066 et al. reached exactly this call). A panicking
+// parser must degrade to an error pane, never take down the
+// multiplexer — especially since previews run on a background
+// goroutine, where an unrecovered panic is fatal to the process.
+func buildPreview(path string, bounds geom.Rect, open func() (io.ReadCloser, error)) (v views.View) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("preview build panicked", "path", path, "panic", r)
+			v = errorPreview(bounds, fmt.Sprintf("preview failed: internal panic (%v)", r))
+		}
+	}()
 	f, err := open()
 	if err != nil {
 		return errorPreview(bounds, err.Error())
@@ -84,8 +100,16 @@ func buildPreview(path string, bounds geom.Rect, open func() (io.ReadCloser, err
 
 // decodeImage attempts a full image decode from a fresh reader. Caps the
 // read at maxImageBytes so a misclassified large file doesn't hang.
-// Returns nil on failure so the caller can fall back to hex.
-func decodeImage(open func() (io.ReadCloser, error), bounds geom.Rect) views.View {
+// Returns nil on failure — including a panicking decoder — so the caller
+// falls back to hex: the hex view renders any bytes safely, which is the
+// right degradation for an image a decoder chokes on.
+func decodeImage(open func() (io.ReadCloser, error), bounds geom.Rect) (v views.View) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("image decode panicked; falling back to hex preview", "panic", r)
+			v = nil
+		}
+	}()
 	f, err := open()
 	if err != nil {
 		return nil
