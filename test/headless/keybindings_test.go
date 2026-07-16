@@ -25,9 +25,12 @@ command = "Kill Pane"
 		t.Fatalf("write keybindings.toml: %v", err)
 	}
 
-	overrides, err := config.LoadKeybindings(path)
+	overrides, rejected, err := config.LoadKeybindings(path)
 	if err != nil {
 		t.Fatalf("LoadKeybindings: %v", err)
+	}
+	if len(rejected) != 0 {
+		t.Fatalf("rejected = %v, want none", rejected)
 	}
 	if len(overrides) != 1 {
 		t.Fatalf("len(overrides) = %d, want 1", len(overrides))

@@ -20,6 +20,7 @@ import (
 	"github.com/oldwired/fvmux/internal/config"
 	"github.com/oldwired/fvmux/internal/logs"
 	"github.com/oldwired/fvmux/internal/menus"
+	"github.com/oldwired/fvmux/internal/prefix"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/statusbar"
@@ -27,16 +28,33 @@ import (
 )
 
 func main() {
+	// All fatal-error paths return out of run() so its defers unwind —
+	// most importantly a.Done(), which restores the terminal out of raw
+	// mode/alternate screen. An os.Exit inside run() would skip that and
+	// leave the user's shell wedged (and the error message invisible
+	// inside the alternate screen), so the message is printed here,
+	// after the restore.
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "fvmux:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	f := parseFlags()
 	if f.ShowVersion {
 		fmt.Println("fvmux", Version)
-		return
+		return nil
 	}
 
+	if f.Session != "" {
+		if err := config.ValidSessionName(f.Session); err != nil {
+			return err
+		}
+	}
 	paths := config.Default().WithRoot(f.Config)
 	if err := paths.EnsureDirs(); err != nil {
-		fmt.Fprintln(os.Stderr, "fvmux: ensuring config dirs:", err)
-		os.Exit(1)
+		return fmt.Errorf("ensuring config dirs: %w", err)
 	}
 	if err := config.SeedDefaults(paths); err != nil {
 		fmt.Fprintln(os.Stderr, "fvmux: warning seeding default configs:", err)
@@ -79,8 +97,7 @@ func main() {
 
 	a, err := fvapp.NewApplication()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fvmux:", err)
-		os.Exit(1)
+		return err
 	}
 	defer a.Done()
 
@@ -90,18 +107,30 @@ func main() {
 	// is still in the default "C-g" prefix space — keybindings.toml chords
 	// are authored against the default prefix (the template uses "C-g X").
 	// Empty / missing file is fine; bad entries are skipped silently.
-	if overrides, err := config.LoadKeybindings(paths.KeybindingsFile()); err == nil {
+	if overrides, rejected, err := config.LoadKeybindings(paths.KeybindingsFile()); err == nil {
 		if len(overrides) > 0 {
 			reg.ApplyOverrides(overrides)
+		}
+		for _, r := range rejected {
+			slog.Warn("keybindings.toml binding skipped", "binding", r)
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "fvmux: warning loading keybindings:", err)
 	}
 	// THEN rebind the whole registry — defaults and overrides alike — onto
 	// the configured prefix, so a "C-g w" override correctly follows to
-	// "C-b w" when the user runs with Ctrl-B.
-	if cfg.General.PrefixKey != "" && cfg.General.PrefixKey != "C-g" {
-		reg.RebindPrefix("C-g", cfg.General.PrefixKey)
+	// "C-b w" when the user runs with Ctrl-B. Resolve through Lookup and
+	// rebind with the resolved token, never the raw config value: an
+	// unlisted prefix_key ("C-x", "ctrl-b") must fall back to the default
+	// for the chords AND the listener together, or every prefix binding
+	// goes dead at startup.
+	prefixSpec := prefix.Lookup(cfg.General.PrefixKey)
+	if pk := cfg.General.PrefixKey; pk != "" && pk != prefixSpec.ConfigKey {
+		slog.Warn("unrecognised prefix_key, using default",
+			"prefix_key", pk, "using", prefixSpec.ConfigKey)
+	}
+	if prefixSpec.ChordToken != "C-g" {
+		reg.RebindPrefix("C-g", prefixSpec.ChordToken)
 	}
 	var mux *muxapp.Mux // captured by the rebuild closure; assigned below.
 	rebuildMenu := func() {
@@ -159,8 +188,7 @@ func main() {
 	}
 
 	if err := bootstrapInitial(mux, paths, f); err != nil {
-		fmt.Fprintln(os.Stderr, "fvmux:", err)
-		os.Exit(1)
+		return err
 	}
 
 	mux.InstallPrefixListener()
@@ -180,6 +208,7 @@ func main() {
 	}
 
 	a.Run()
+	return nil
 }
 
 // bootstrapInitial decides between loading a saved session and opening a

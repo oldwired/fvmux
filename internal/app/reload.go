@@ -2,6 +2,7 @@ package app
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 
@@ -37,9 +38,15 @@ func (m *Mux) ReloadConfig() {
 		slog.Warn("reload: profiles.toml", "err", err)
 	}
 
-	overrides, err := config.LoadKeybindings(paths.KeybindingsFile())
+	overrides, rejected, err := config.LoadKeybindings(paths.KeybindingsFile())
 	if err != nil {
 		slog.Warn("reload: keybindings.toml", "err", err)
+	}
+	if len(rejected) > 0 {
+		slog.Warn("reload: keybindings.toml has undispatchable chords", "rejected", rejected)
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
+			"keybindings.toml: %d binding(s) use chords the prefix dispatcher can't emit and were skipped:\n%s",
+			[]any{len(rejected), strings.Join(rejected, "\n")}, msgbox.OKOnly)
 	}
 
 	// Factory baseline → user overrides → prefix-key. Order matters:
@@ -52,11 +59,21 @@ func (m *Mux) ReloadConfig() {
 	if len(overrides) > 0 {
 		m.Reg.ApplyOverrides(overrides)
 	}
-	if pk := m.Opts.Config.General.PrefixKey; pk != "" && pk != "C-g" {
-		m.Reg.RebindPrefix("C-g", pk)
-		if m.prefix != nil {
-			m.prefix.SetSpec(prefix.Lookup(pk))
-		}
+	// Resolve through Lookup FIRST and rebind with the resolved token —
+	// never the raw config string — so the registry's chords and the
+	// armed listener can't diverge (an unlisted prefix_key falls back to
+	// the default for BOTH). SetSpec runs unconditionally: reverting to
+	// C-g must resync a listener still armed on the old prefix.
+	spec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
+	if pk := m.Opts.Config.General.PrefixKey; pk != "" && pk != spec.ConfigKey {
+		slog.Warn("reload: unrecognised prefix_key, using default",
+			"prefix_key", pk, "using", spec.ConfigKey)
+	}
+	if spec.ChordToken != "C-g" {
+		m.Reg.RebindPrefix("C-g", spec.ChordToken)
+	}
+	if m.prefix != nil {
+		m.prefix.SetSpec(spec)
 	}
 
 	m.reloadThemesInternal()
