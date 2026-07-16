@@ -227,16 +227,26 @@ var ctrlLetters = map[uint16]rune{
 
 // DispatchableChord reports whether chord — in canonical registry form
 // "<prefix> <step>" — can actually be produced by the dispatcher's
-// state machine. chordOf only ever emits a C-letter token, one of the
-// five special atoms (Tab, Esc, Enter, Backspace, Space), or a bare
-// printable character as the second step. Arrow/function/navigation
-// keys and A-/S- modified steps parse fine in keybindings.toml, but a
-// binding to one would silently disarm its command: the factory chord
-// is stripped while the new chord can never fire. Callers reject such
-// bindings with a warning instead of applying them.
+// state machine. Two requirements:
+//
+//   - The first step must be the default prefix token ("C-g"):
+//     keybindings.toml is authored in the default-prefix space and
+//     rebound afterwards, so a chord led by anything else ("C-x a")
+//     applies fine but is never emitted — while having already
+//     stripped the command's working factory chord.
+//   - The second step must be one of the atoms chordOf emits: a
+//     C-letter token, one of the five special atoms (Tab, Esc, Enter,
+//     Backspace, Space), or a bare printable character. Arrows,
+//     F-keys, and A-/S- modified steps parse but can never fire.
+//
+// Callers reject failing bindings with a warning instead of applying
+// them.
 func DispatchableChord(chord string) bool {
 	steps := strings.Fields(chord)
 	if len(steps) != 2 {
+		return false
+	}
+	if steps[0] != Default.ChordToken {
 		return false
 	}
 	return dispatchableStep(steps[1])

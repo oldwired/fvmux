@@ -57,7 +57,7 @@ func LoadKeybindings(path string) (overrides []commands.Override, rejected []str
 		// delete an existing binding, so an odd chord is a no-op.
 		if b.Command != "" && !prefix.DispatchableChord(chord) {
 			rejected = append(rejected,
-				fmt.Sprintf("%s → %s (the dispatcher can't emit this chord)", b.Chord, b.Command))
+				fmt.Sprintf("%s → %s (chords must start with the default prefix C-g and end with a key the dispatcher can emit)", b.Chord, b.Command))
 			continue
 		}
 		overrides = append(overrides, commands.Override{

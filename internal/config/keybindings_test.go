@@ -144,3 +144,36 @@ command = "Next Window"
 		t.Fatalf("expected 4 accepted overrides, got %d: %+v", len(overrides), overrides)
 	}
 }
+
+// TestLoadKeybindings_RejectsForeignPrefixStep guards the first-step
+// rule: overrides are authored in the default C-g space (and rebound
+// afterwards), so a chord led by any other token ("C-x a") would apply,
+// strip the factory chord, and never fire. It must be rejected with the
+// factory binding left intact.
+func TestLoadKeybindings_RejectsForeignPrefixStep(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keybindings.toml")
+	body := `
+[[binding]]
+chord   = "C-x a"
+command = "Kill Pane"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrides, rejected, err := LoadKeybindings(path)
+	if err != nil {
+		t.Fatalf("LoadKeybindings: %v", err)
+	}
+	if len(overrides) != 0 {
+		t.Fatalf("overrides = %v; want none — C-x a can never be emitted", overrides)
+	}
+	if len(rejected) != 1 || !strings.Contains(rejected[0], "Kill Pane") {
+		t.Fatalf("rejected = %v; want one entry naming Kill Pane", rejected)
+	}
+	reg := commands.Defaults()
+	reg.ApplyOverrides(overrides)
+	if reg.LookupChord("C-g x") == nil {
+		t.Fatal("factory chord C-g x must survive a rejected foreign-prefix binding")
+	}
+}

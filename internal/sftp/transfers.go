@@ -498,11 +498,14 @@ type renameClient interface {
 
 // remoteReplace atomically replaces dest with tmp on the remote side.
 // Prefers the posix-rename extension (overwrites in one step). Servers
-// without it get rename-first: a plain rename succeeds when dest doesn't
-// exist, and only if it fails is dest removed and the rename retried.
-// If that final rename also fails the temp file is deliberately kept —
-// the copy completed, and removing it too would destroy both the
-// original and the fresh data.
+// without it get rename-first: a plain rename succeeds when dest
+// doesn't exist. If it fails — which may mean "dest exists" but can
+// equally be a transient or permission error the SFTP status doesn't
+// let us distinguish — dest is moved ASIDE, never deleted: only after
+// tmp has landed at dest is the backup removed, and if the final
+// rename fails the backup is moved back. The original therefore
+// survives every failure mode, and the temp copy is never removed
+// here either — no interleaving can destroy both files.
 func remoteReplace(c renameClient, tmp, dest string) error {
 	if err := c.PosixRename(tmp, dest); err == nil {
 		return nil
@@ -510,10 +513,19 @@ func remoteReplace(c renameClient, tmp, dest string) error {
 	if err := c.Rename(tmp, dest); err == nil {
 		return nil
 	}
-	_ = c.Remove(dest)
-	if err := c.Rename(tmp, dest); err != nil {
+	backup := dest + ".replaced-fvmux"
+	_ = c.Remove(backup) // clear a stale backup left by an earlier crash
+	if err := c.Rename(dest, backup); err != nil {
+		// Couldn't move the original aside — nothing has been touched.
 		return fmt.Errorf("replacing %s failed: %w (the transferred data is preserved at %s)", dest, err, tmp)
 	}
+	if err := c.Rename(tmp, dest); err != nil {
+		if rerr := c.Rename(backup, dest); rerr != nil {
+			return fmt.Errorf("replacing %s failed: %w (the original was moved to %s; the transferred data is preserved at %s)", dest, err, backup, tmp)
+		}
+		return fmt.Errorf("replacing %s failed: %w (the original was restored; the transferred data is preserved at %s)", dest, err, tmp)
+	}
+	_ = c.Remove(backup)
 	return nil
 }
 

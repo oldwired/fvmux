@@ -194,16 +194,18 @@ type errReader struct{ err error }
 func (e errReader) Read(p []byte) (int, error) { return 0, e.err }
 
 // fakeRenameClient scripts the three-method renameClient surface so
-// remoteReplace's fallback ladder (PosixRename → Rename → Remove(dest) →
-// Rename) can be driven through each branch. Every call the code makes is
-// recorded so tests can assert exactly what ran — in particular that a
-// failed replace never deletes the freshly-transferred tmp file.
+// remoteReplace's fallback ladder (PosixRename → Rename → move-dest-
+// aside → Rename → reap/restore backup) can be driven through each
+// branch. Every call the code makes is recorded so tests can assert
+// exactly what ran — in particular that a failed replace never deletes
+// the freshly-transferred tmp file NOR the original destination.
 type fakeRenameClient struct {
 	posixRename func(old, new string) error
 	rename      func(old, new string) error
 	remove      func(path string) error
 
 	renameCalls int
+	renameArgs  [][2]string
 	removeCalls []string
 }
 
@@ -216,6 +218,7 @@ func (f *fakeRenameClient) PosixRename(old, new string) error {
 
 func (f *fakeRenameClient) Rename(old, new string) error {
 	f.renameCalls++
+	f.renameArgs = append(f.renameArgs, [2]string{old, new})
 	if f.rename != nil {
 		return f.rename(old, new)
 	}
@@ -267,53 +270,122 @@ func TestRemoteReplace_FirstRenameSucceeds(t *testing.T) {
 	}
 }
 
-// (c) PosixRename fails, first Rename fails, Remove(dest) runs, second
-// Rename succeeds → ok; exactly one Remove and its argument is dest, not
-// tmp.
-func TestRemoteReplace_RemoveDestThenRenameSucceeds(t *testing.T) {
+const testBackup = testDest + ".replaced-fvmux"
+
+// (c) PosixRename fails, first Rename fails (dest exists) → dest is
+// moved ASIDE (never Removed), tmp lands at dest, the backup is reaped.
+// The only Remove calls ever allowed are the stale-backup sweep and the
+// final backup reap — dest and tmp themselves must never be removed.
+func TestRemoteReplace_BacksUpDestThenRenameSucceeds(t *testing.T) {
 	f := &fakeRenameClient{
 		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
 	}
 	f.rename = func(_, _ string) error {
-		if f.renameCalls == 1 { // first invocation fails (dest exists)
+		if f.renameCalls == 1 { // tmp→dest fails (dest exists)
 			return errors.New("dest exists")
 		}
-		return nil // retry after Remove(dest) succeeds
+		return nil // dest→backup and retry tmp→dest succeed
 	}
 	if err := remoteReplace(f, testTmp, testDest); err != nil {
 		t.Fatalf("remoteReplace = %v; want nil", err)
 	}
-	if f.renameCalls != 2 {
-		t.Errorf("Rename called %d times; want 2", f.renameCalls)
+	wantRenames := [][2]string{
+		{testTmp, testDest},    // optimistic rename
+		{testDest, testBackup}, // move original aside
+		{testTmp, testDest},    // land the copy
 	}
-	if len(f.removeCalls) != 1 {
-		t.Fatalf("Remove called %d times; want exactly 1 (%v)", len(f.removeCalls), f.removeCalls)
+	if len(f.renameArgs) != 3 {
+		t.Fatalf("renames = %v; want %v", f.renameArgs, wantRenames)
 	}
-	if f.removeCalls[0] != testDest {
-		t.Errorf("Remove(%q); want Remove(%q) — must remove dest, never tmp", f.removeCalls[0], testDest)
+	for i, want := range wantRenames {
+		if f.renameArgs[i] != want {
+			t.Errorf("rename[%d] = %v; want %v", i, f.renameArgs[i], want)
+		}
+	}
+	for _, rm := range f.removeCalls {
+		if rm == testDest || rm == testTmp {
+			t.Errorf("Remove(%q) — dest/tmp must never be removed", rm)
+		}
 	}
 }
 
-// (d) PosixRename fails and both Renames fail → error mentions the tmp
-// path, and Remove was called exactly once with dest. The regression:
-// the tmp file (the only surviving copy of the data) must NOT be removed.
-func TestRemoteReplace_BothRenamesFailPreservesTmp(t *testing.T) {
+// (d) PosixRename fails and the optimistic Rename fails for ANY reason
+// (could be transient, permission, or dest-exists — SFTP can't tell):
+// the original must never be deleted. When even the move-aside rename
+// fails, NOTHING has been touched: no Remove of dest or tmp, and the
+// error names the preserved tmp path.
+func TestRemoteReplace_RenameFailurePreservesDestAndTmp(t *testing.T) {
 	f := &fakeRenameClient{
 		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
-		rename:      func(_, _ string) error { return errors.New("rename failed") },
+		rename:      func(_, _ string) error { return errors.New("connection reset") },
 	}
 	err := remoteReplace(f, testTmp, testDest)
 	if err == nil {
-		t.Fatal("remoteReplace = nil; want error when both renames fail")
+		t.Fatal("remoteReplace = nil; want error when renames fail")
 	}
 	if !strings.Contains(err.Error(), testTmp) {
 		t.Errorf("error %q does not mention preserved tmp path %q", err.Error(), testTmp)
 	}
-	if f.renameCalls != 2 {
-		t.Errorf("Rename called %d times; want 2", f.renameCalls)
+	for _, rm := range f.removeCalls {
+		if rm == testDest || rm == testTmp {
+			t.Errorf("Remove(%q) — a failed replace must not delete dest or tmp", rm)
+		}
 	}
-	if len(f.removeCalls) != 1 || f.removeCalls[0] != testDest {
-		t.Errorf("Remove calls = %v; want exactly one Remove(%q) and tmp left intact", f.removeCalls, testDest)
+}
+
+// (e) The move-aside succeeds but the final rename fails → the original
+// is restored from the backup and the error still names tmp.
+func TestRemoteReplace_FinalRenameFailureRestoresDest(t *testing.T) {
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+	}
+	f.rename = func(old, new string) error {
+		if old == testTmp { // both tmp→dest attempts fail
+			return errors.New("write denied")
+		}
+		return nil // dest→backup and backup→dest succeed
+	}
+	err := remoteReplace(f, testTmp, testDest)
+	if err == nil {
+		t.Fatal("remoteReplace = nil; want error")
+	}
+	if !strings.Contains(err.Error(), "restored") || !strings.Contains(err.Error(), testTmp) {
+		t.Errorf("error %q should report the restored original and the preserved tmp", err.Error())
+	}
+	last := f.renameArgs[len(f.renameArgs)-1]
+	if last != [2]string{testBackup, testDest} {
+		t.Errorf("last rename = %v; want backup restored to dest", last)
+	}
+	for _, rm := range f.removeCalls {
+		if rm == testDest || rm == testTmp {
+			t.Errorf("Remove(%q) — dest/tmp must never be removed", rm)
+		}
+	}
+}
+
+// (f) Worst case: move-aside succeeded, final rename fails, restore
+// fails too → the error must tell the user where BOTH copies live.
+func TestRemoteReplace_RestoreFailureNamesBothCopies(t *testing.T) {
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+	}
+	f.rename = func(old, new string) error {
+		if old == testDest {
+			return nil // move-aside succeeds
+		}
+		return errors.New("session gone") // everything after fails
+	}
+	err := remoteReplace(f, testTmp, testDest)
+	if err == nil {
+		t.Fatal("remoteReplace = nil; want error")
+	}
+	if !strings.Contains(err.Error(), testBackup) || !strings.Contains(err.Error(), testTmp) {
+		t.Errorf("error %q should name both the backup and the tmp copy", err.Error())
+	}
+	for _, rm := range f.removeCalls {
+		if rm == testDest || rm == testTmp {
+			t.Errorf("Remove(%q) — dest/tmp must never be removed", rm)
+		}
 	}
 }
 

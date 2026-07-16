@@ -380,19 +380,26 @@ func buildBrowser(a *fvapp.Application, alias, controlPath string, hostOpts []st
 	// the window is removed from the desktop, so we have a clean
 	// window to act on.
 	d.OnClose = func() {
-		mgr.CancelAll()           // cooperative cancel of in-flight transfers.
-		browserClosed.Store(true) // stop new async remote reads.
+		browserClosed.Store(true) // stop new async remote reads/ops.
+		mgr.CancelAll()           // prompt cancel of transfers already running.
 		tt.ok = false
 		anim.Unregister(tt)
 		removeLiveMgr(mgr)
-		// Close the SFTP client only after every transfer goroutine AND
-		// any in-flight async listing refresh has drained — pkg/sftp's
-		// Client is not safe to use concurrently with Close. Run on a
-		// background goroutine so a network-stalled transfer can't freeze
-		// the UI; the cancel above gets healthy transfers out promptly.
+		// Close the SFTP client only after everything using it has
+		// drained — pkg/sftp's Client is not safe to use concurrently
+		// with Close. Order matters: an in-flight async op (a tree walk,
+		// a dedicated-session open — tracked by refreshWG) may still
+		// ENQUEUE transfers after the CancelAll above, so the ops must
+		// drain first, then a second (idempotent) CancelAll sweeps any
+		// late enqueues, and only then is mgr.Wait meaningful — a
+		// Wait-before-drain would let late transfers escape both the
+		// cancel and the wait and race the client shutdown. Runs on a
+		// background goroutine so a network-stalled op can't freeze the
+		// UI.
 		go func() {
-			mgr.Wait()
 			refreshWG.Wait()
+			mgr.CancelAll()
+			mgr.Wait()
 			_ = c.Close()
 			if onClose != nil {
 				onClose()

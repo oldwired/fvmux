@@ -101,7 +101,15 @@ func sectionRange(lines []string, section string) (start, end int) {
 		if !strings.HasPrefix(t, "[") || strings.HasPrefix(t, "[[") {
 			continue
 		}
-		name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(t, "["), "]"))
+		// Parse only up to the closing ']' — a header may carry a
+		// trailing comment ("[appearance] # colors"), and treating the
+		// comment as part of the name would miss the section, append a
+		// duplicate table, and corrupt the file.
+		close := strings.IndexByte(t, ']')
+		if close < 0 {
+			continue // malformed header; not ours to interpret
+		}
+		name := strings.TrimSpace(t[1:close])
 		if start >= 0 {
 			return start, i
 		}

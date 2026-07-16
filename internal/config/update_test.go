@@ -232,3 +232,45 @@ func TestUpdateKeys_OnSeededTemplateKeepsComments(t *testing.T) {
 		t.Errorf("Theme = %q; want night", cfg.Appearance.Theme)
 	}
 }
+
+// TestUpdateKeys_SectionHeaderTrailingComment pins the header-comment
+// regression: "[appearance] # colors" is a valid TOML header, and the
+// parser must match the section by the name inside the brackets — not
+// treat the comment as part of it, miss the section, and append a
+// duplicate [appearance] table that corrupts the file.
+func TestUpdateKeys_SectionHeaderTrailingComment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := strings.Join([]string{
+		"[general]",
+		`prefix_key = "C-g"`,
+		"",
+		"[appearance] # colors",
+		`theme = "slate"`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateKeys(path,
+		KV{Section: "appearance", Key: "theme", Value: "night"}); err != nil {
+		t.Fatalf("UpdateKeys: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "[appearance]"); got != 1 {
+		t.Fatalf("file has %d [appearance] headers, want 1 — duplicate table corrupts the config:\n%s", got, data)
+	}
+	if !strings.Contains(string(data), "[appearance] # colors") {
+		t.Errorf("header trailing comment lost:\n%s", data)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after update: %v", err)
+	}
+	if cfg.Appearance.Theme != "night" {
+		t.Errorf("theme = %q; want night", cfg.Appearance.Theme)
+	}
+}
