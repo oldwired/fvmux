@@ -7,8 +7,9 @@ import (
 )
 
 // runDialog prompts the user for a one-shot command and spawns it in a
-// new window via `sh -c`. Lets users invoke ad-hoc commands (`nano …`,
-// `htop`, `ssh staging-3`) without defining a profile first.
+// new window via the system shell (`sh -c`; `cmd /c` on Windows). Lets
+// users invoke ad-hoc commands (`nano …`, `htop`, `ssh staging-3`)
+// without defining a profile first.
 //
 // Strings starting with ":" are interpreted as built-in fvmux easter
 // eggs (`:tea`, `:konami`, `:rot13`) instead of shell commands.
@@ -27,10 +28,13 @@ func (m *Mux) runDialog() {
 			return
 		}
 	}
+	// profile.ShellCommand, not a hardcoded /bin/sh — Run Command must
+	// work on Windows too (cmd /c), same as new_window_command.
+	sh, args := profile.ShellCommand(cmd)
 	prof := &profile.Profile{
 		Name:    "run",
-		Command: "/bin/sh",
-		Args:    []string{"-c", cmd},
+		Command: sh,
+		Args:    args,
 		Title:   shortTitleFor(cmd),
 	}
 	_, _ = m.openWindowFromProfile(prof)

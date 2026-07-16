@@ -103,9 +103,11 @@ confirm_kill    = true
 splash_enabled  = true
 
 # connect_split: where <prefix> H (Connect to Host) puts the session.
-# "vertical" splits the focused pane side-by-side, "horizontal" stacks
-# it, "window" opens a floating window ("window" is also the fallback
-# when no pane is focused).
+# Follows fvmux's split naming (same as tmux): "vertical" stacks the
+# new pane below the focused one (like Split Vertical, <prefix> "),
+# "horizontal" places it beside (like Split Horizontal, <prefix> %),
+# "window" opens a floating window ("window" is also the fallback when
+# no pane is focused).
 connect_split   = "vertical"
 
 # new_window_command: when non-empty, <prefix> c runs this command
@@ -186,6 +188,12 @@ close_on_exit = false
 # args = ["watch", "-x", "test"]
 # cwd  = "~/code/myproj"
 # env  = { RUST_BACKTRACE = "1" }
+
+# layout: pre-split the profile's window using the session layout DSL
+# (each leaf names a profile; see a saved session file for the shape).
+# [[profile]]
+# name   = "dev"
+# layout = 'split-h:0.7{leaf:profile=shell}{leaf:profile=logs}'
 `
 
 const templateHosts = `# fvmux additional SSH hosts.

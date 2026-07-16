@@ -14,23 +14,17 @@ import (
 	"github.com/oldwired/fvmux/internal/layout"
 )
 
-// TestBroadcastIfSync_Gates is the regression for finding #12: resize mode
-// and copy mode now short-circuit broadcastIfSync so their navigation keys
-// (l/h/j/k, arrows, Esc) aren't mirrored into every synced pane before the
-// later listener in the OfPreProcess chain consumes them.
+// TestBroadcastIfSync_Gates is the regression for finding #12: resize mode and
+// copy mode short-circuit broadcastIfSync so their navigation keys (l/h/j/k,
+// arrows, Esc) aren't mirrored into every synced pane before the later
+// listener in the OfPreProcess chain consumes them.
 //
-// Honesty note: the *suppressed write* is not directly observable headless.
-// The broadcast reaches other panes only via terminal.HandleEvent, which is
-// a no-op on an un-Started terminal (t.pty == nil → early return), and a
-// real PTY's echo would be racy to observe. So this test pins the two
-// things that ARE cleanly checkable and that a regression would break:
-//
-//   - the gate is consulted with a fully-populated synced window whose focus
-//     and pane tree are non-nil, and never panics on any of the three paths
-//     (resize-gated, copy-gated, ungated walk);
-//   - m.copyMode.Active() is nil-safe inside the gate (m.copyMode == nil must
-//     not deref);
-//   - the original event is never mutated on any path.
+// The suppressed write is not observable on an un-Started terminal
+// (terminal.HandleEvent no-ops when its PTY is nil), so this test injects the
+// m.syncSend seam: a recorder that captures exactly which pane terminals the
+// gate delivers to, intercepting before terminal.HandleEvent. Deleting either
+// gate now flips a recorded count from 0 to non-zero — so the test genuinely
+// pins the gate instead of merely exercising it.
 func TestBroadcastIfSync_Gates(t *testing.T) {
 	desk := fvapp.NewDesktop(geom.NewRect(0, 0, 80, 24))
 	m := &Mux{
@@ -38,8 +32,9 @@ func TestBroadcastIfSync_Gates(t *testing.T) {
 		windows: map[views.View]*windowState{},
 	}
 
-	// A synced current window with focus and two real (un-Started) panes —
-	// the shape broadcastIfSync would actually iterate over.
+	// A synced current window: focus on leafA, with leafB the non-focused
+	// sibling. broadcastIfSync should reach leafB's terminal only — never the
+	// focused pane, never a pane twice.
 	a, b := termPane(), termPane()
 	leafA, leafB := layout.Leaf(a), layout.Leaf(b)
 	root := layout.Split(views.SplitVertical, leafA, leafB)
@@ -55,6 +50,12 @@ func TestBroadcastIfSync_Gates(t *testing.T) {
 		t.Fatalf("precondition: synced window should be current, got %v", m.currentWindow())
 	}
 
+	// Recorder seam: capture every terminal the gate would deliver to.
+	var got []*terminal.Terminal
+	m.syncSend = func(_ *drivers.Event, term *terminal.Terminal) {
+		got = append(got, term)
+	}
+
 	newKey := func() drivers.Event {
 		return drivers.Event{What: consts.EvKeyDown, UnicodeChar: 'x'}
 	}
@@ -65,29 +66,42 @@ func TestBroadcastIfSync_Gates(t *testing.T) {
 		}
 	}
 
-	// Ungated: not in resize mode, m.copyMode is nil. The gate must treat a
-	// nil copyMode as inactive (Active() nil-safe) and fall through to the
-	// leaf walk without panicking. The un-Started terminals no-op.
-	t.Run("ungated_nil_copymode", func(t *testing.T) {
+	// (a) Ungated: exactly the one non-focused pane's terminal is delivered.
+	t.Run("ungated_delivers_to_nonfocused_only", func(t *testing.T) {
+		got = nil
 		m.resizeMode = false
 		m.copyMode = nil
 		ev := newKey()
 		m.broadcastIfSync(&ev)
 		assertUntouched(t, ev)
+		if len(got) != 1 {
+			t.Fatalf("ungated broadcast reached %d terminals, want exactly 1", len(got))
+		}
+		if got[0] != b.Term {
+			t.Error("ungated broadcast reached the wrong terminal; want the non-focused pane's")
+		}
+		if got[0] == a.Term {
+			t.Error("broadcast must never echo into the focused pane")
+		}
 	})
 
-	// Resize-mode gate: must early-return before the leaf walk.
-	t.Run("resize_mode_gate", func(t *testing.T) {
+	// (b) Resize-mode gate: zero deliveries.
+	t.Run("resize_mode_gate_suppresses", func(t *testing.T) {
+		got = nil
 		m.resizeMode = true
 		m.copyMode = nil
 		ev := newKey()
 		m.broadcastIfSync(&ev)
 		assertUntouched(t, ev)
+		if len(got) != 0 {
+			t.Fatalf("resize mode must suppress the broadcast; reached %d terminals", len(got))
+		}
 		m.resizeMode = false
 	})
 
-	// Copy-mode gate: an active driver must early-return the broadcast.
-	t.Run("copy_mode_gate", func(t *testing.T) {
+	// (c) Copy-mode gate: zero deliveries while a driver is active.
+	t.Run("copy_mode_gate_suppresses", func(t *testing.T) {
+		got = nil
 		m.resizeMode = false
 		drv := copymode.Show(m.App, terminal.New(geom.NewRect(0, 0, 40, 12)))
 		if !drv.Active() {
@@ -97,7 +111,23 @@ func TestBroadcastIfSync_Gates(t *testing.T) {
 		ev := newKey()
 		m.broadcastIfSync(&ev)
 		assertUntouched(t, ev)
+		if len(got) != 0 {
+			t.Fatalf("active copy mode must suppress the broadcast; reached %d terminals", len(got))
+		}
 		drv.Close()
 		m.copyMode = nil
+	})
+
+	// Nil-safety: m.copyMode == nil must be treated as inactive (Active() is
+	// nil-safe) and the ungated walk must proceed without panicking.
+	t.Run("nil_copymode_is_inactive", func(t *testing.T) {
+		got = nil
+		m.resizeMode = false
+		m.copyMode = nil
+		ev := newKey()
+		m.broadcastIfSync(&ev) // must not panic
+		if len(got) != 1 {
+			t.Fatalf("nil copyMode should be treated as inactive; reached %d terminals, want 1", len(got))
+		}
 	})
 }

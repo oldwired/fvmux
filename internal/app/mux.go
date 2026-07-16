@@ -137,6 +137,11 @@ type Mux struct {
 	mouseView  *prefix.MouseView
 	copyMode   *copymode.Driver // active copy-mode session, nil/inactive otherwise
 
+	// syncSend, when non-nil, replaces the default per-pane delivery in
+	// broadcastIfSync (terminal.HandleEvent). Production leaves it nil; tests
+	// inject a recorder to observe exactly which panes the sync gate reaches.
+	syncSend func(ev *drivers.Event, t *terminal.Terminal)
+
 	layoutPreset layout.Preset
 
 	hideClock bool // Ctrl-G t suppresses the right-side clock.
@@ -157,6 +162,13 @@ type Mux struct {
 	eggTimers []*time.Timer // pending easter-egg AfterFunc handles.
 
 	sftpRestore sftpRestoreTracker
+
+	// sftpConnecting holds aliases with an SFTP browser connect in flight
+	// (from openSftpBrowser's async ShowAsync). A second Ctrl-G F to the
+	// same alias while one is connecting is ignored so a dead host can't
+	// spawn a pile of duplicate connects. Touched only on the UI goroutine
+	// (openSftpBrowser and ShowAsync's onResolved both run there).
+	sftpConnecting map[string]bool
 
 	// signalQuit is set by the OS-signal handler so OnQuitRequested skips
 	// the interactive confirm-kill prompt (a modal is impossible during
@@ -430,28 +442,67 @@ func (m *Mux) sftpBrowser() {
 // the master → retry SFTP) can call back into it without re-running
 // the host picker.
 func (m *Mux) openSftpBrowser(alias string) {
+	// Dedup: ignore a second Ctrl-G F to the same alias while its connect
+	// is still in flight, so a dead host can't accumulate duplicate ssh
+	// connects. Cleared in the onResolved callback below (success or
+	// failure). Multiple browsers to the same alias are still allowed once
+	// connected — the guard only covers the connecting window.
+	if !m.beginSftpConnect(alias) {
+		return
+	}
+
 	// Pool registers the alias and returns the ControlPath every
 	// subsequent ssh through this alias will share. The first
 	// connection establishes the master via its own PTY (so
 	// auth prompts appear in the pane); pool spawns no processes.
 	//
-	// Browser is non-modal, so Show returns immediately. The pool
-	// Release must fire when the user actually closes the browser —
-	// thread it through the onClose callback Show invokes from
-	// d.OnClose.
+	// ShowAsync connects off the UI goroutine and returns immediately;
+	// the pool Release is threaded through onClose (fires exactly once —
+	// on browser close for success, immediately on connect failure), so
+	// we must never Release here ourselves.
 	sock := m.sshPool.Acquire(alias)
 	host := m.hostByAlias(alias)
-	err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel, func() { m.sshPool.Release(alias) })
-	if err == nil {
-		return
+	// Non-modal status-bar feedback so the user knows the connect started
+	// even when the host is slow to answer (there's no dialog yet). The
+	// generous window is cosmetic — onResolved clears it either way.
+	m.setFlash("SFTP "+alias+": connecting…", 60*time.Second, flashPrioNumbers)
+	sftp.ShowAsync(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel,
+		func() { m.sshPool.Release(alias) },
+		func(err error) {
+			m.endSftpConnect(alias)
+			m.setFlash("", 0, flashPrioNumbers) // clear the connecting flash.
+			if err == nil {
+				return // browser is on the desktop; that's the feedback.
+			}
+			if errors.Is(err, sftp.ErrAuthRequired) {
+				m.offerAuthThenRetry(alias)
+				return
+			}
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+				"Couldn't open SFTP to %s:\n%s", []any{alias, err.Error()},
+				msgbox.OKOnly)
+		})
+}
+
+// beginSftpConnect marks alias as having an SFTP connect in flight and
+// reports whether the caller should proceed. Returns false when a connect
+// to the same alias is already running, so a repeated Ctrl-G F can't spawn
+// duplicate connects to a slow or dead host. UI-goroutine only (no mutex).
+func (m *Mux) beginSftpConnect(alias string) bool {
+	if m.sftpConnecting == nil {
+		m.sftpConnecting = map[string]bool{}
 	}
-	if errors.Is(err, sftp.ErrAuthRequired) {
-		m.offerAuthThenRetry(alias)
-		return
+	if m.sftpConnecting[alias] {
+		return false
 	}
-	msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
-		"Couldn't open SFTP to %s:\n%s", []any{alias, err.Error()},
-		msgbox.OKOnly)
+	m.sftpConnecting[alias] = true
+	return true
+}
+
+// endSftpConnect clears alias's in-flight mark once its connect resolves
+// (either the browser opened or the connect failed). UI-goroutine only.
+func (m *Mux) endSftpConnect(alias string) {
+	delete(m.sftpConnecting, alias)
 }
 
 func (m *Mux) connectHost() {

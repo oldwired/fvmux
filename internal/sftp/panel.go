@@ -51,9 +51,12 @@ type panel struct {
 }
 
 // newPanel builds tree + listing for one side, inserts them into d,
-// and wires OnExpand / OnSelect. The listing's TreeView holds only
-// leaf nodes (HasChildren = false on every entry) so Enter never
-// triggers an inline expansion; the dialog-level key handler
+// and wires OnExpand / OnSelect. treeRoots / listingRoots are the
+// initial folder tree and cwd listing — the caller supplies them so the
+// remote panel's first network reads happen off the UI goroutine (in
+// the connect phase), not inside this constructor. The listing's
+// TreeView holds only leaf nodes (HasChildren = false on every entry) so
+// Enter never triggers an inline expansion; the dialog-level key handler
 // intercepts Enter first and routes it through listingEnter.
 func newPanel(
 	d *dialogs.Dialog,
@@ -63,6 +66,7 @@ func newPanel(
 	header *dialogs.StaticText,
 	headerW int,
 	treeBounds, listingBounds geom.Rect,
+	treeRoots, listingRoots []*treeview.Node,
 ) *panel {
 	p := &panel{
 		isRemote: isRemote,
@@ -72,14 +76,16 @@ func newPanel(
 		width:    headerW,
 	}
 
+	p.tree = treeview.New(treeBounds, treeRoots)
+	p.listing = treeview.New(listingBounds, listingRoots)
 	if isRemote {
-		p.tree = treeview.New(treeBounds, buildRemoteTree(c, cwd))
-		p.tree.OnExpand = func(n *treeview.Node) { expandRemoteTree(c, n) }
-		p.listing = treeview.New(listingBounds, buildRemoteListing(c, cwd))
+		// Remote expansion is async: a synchronous ReadDir on the UI
+		// event goroutine would freeze every window while a slow or dead
+		// link answers. expandRemoteAsync attaches a "Loading…" placeholder
+		// and schedules the read off-thread.
+		p.tree.OnExpand = func(n *treeview.Node) { p.expandRemoteAsync(n) }
 	} else {
-		p.tree = treeview.New(treeBounds, buildLocalTree(cwd))
 		p.tree.OnExpand = func(n *treeview.Node) { expandLocalTree(n) }
-		p.listing = treeview.New(listingBounds, buildLocalListing(cwd))
 	}
 
 	// Tree drives listing: highlighting a folder in the tree sets
@@ -226,6 +232,116 @@ func (p *panel) remoteRefreshLoop() {
 		}
 		p.refMu.Unlock()
 	}
+}
+
+// expandRemoteAsync lazily populates a remote folder node's children
+// off the UI goroutine. It is the OnExpand callback for the remote tree.
+//
+// The treeview calls OnExpand from Toggle just before flipping the node's
+// Expanded flag, and then only actually expands if the node has ≥1 child.
+// So we attach a transient "Loading…" placeholder synchronously — that
+// gives the node a child (the tree expands and shows the placeholder,
+// immediate feedback) and doubles as the "a fetch is already in flight"
+// marker: the len(Children) > 0 guard below then makes a repeat expand
+// (collapse-then-expand, or a double Right-arrow) a no-op instead of a
+// second network read. When the off-thread ReadDir returns we swap the
+// placeholder for the real folders (or an error row) and rebuild the
+// flattened view, preserving the user's cursor.
+func (p *panel) expandRemoteAsync(n *treeview.Node) {
+	if n == nil || len(n.Children) > 0 {
+		return // already loaded, or a load is already pending — don't refetch.
+	}
+	e, ok := n.Data.(*fileEntry)
+	if !ok || !e.IsDir {
+		return
+	}
+	if p.closed != nil && p.closed.Load() {
+		return
+	}
+
+	// Placeholder makes the node expandable (so Toggle flips Expanded and
+	// the row shows immediately) and gates against a second scheduling.
+	placeholder := &treeview.Node{Label: "Loading…", Parent: n}
+	n.Children = []*treeview.Node{placeholder}
+
+	c := p.c
+	path := e.Path
+	if p.refreshWG != nil {
+		p.refreshWG.Add(1) // gates the browser's client.Close on teardown.
+	}
+	go func() {
+		if p.refreshWG != nil {
+			defer p.refreshWG.Done()
+		}
+		kids := buildRemoteTree(c, path) // network read, off the UI goroutine.
+		views.CallSoon(func() {
+			if p.closed != nil && p.closed.Load() {
+				return // browser tore down while the read was in flight.
+			}
+			// Only replace if the node is still showing our placeholder.
+			// If some other mutation intervened (unlikely, but honest to
+			// check), drop this stale result rather than clobber it.
+			if len(n.Children) != 1 || n.Children[0] != placeholder {
+				return
+			}
+			for _, k := range kids {
+				k.Parent = n
+			}
+			n.Children = kids
+			p.rebuildTreePreservingFocus()
+			views.MarkDirty()
+		})
+	}()
+}
+
+// rebuildTreePreservingFocus refreshes the tree's flattened row list
+// after its node children changed off-thread. TreeView's only public
+// rebuild trigger is SetRoots, which resets the cursor to row 0 — jarring
+// after an expand deep in the tree. So we capture the focused node,
+// rebuild, then re-derive its new row index. The viewport scroll offset
+// is left untouched, so the expanded folder stays put on screen and its
+// children appear below it.
+func (p *panel) rebuildTreePreservingFocus() {
+	if p.tree == nil {
+		return
+	}
+	focused := p.tree.CurrentNode()
+	p.tree.SetRoots(p.tree.Roots) // rebuilds the flat list; resets Focused to 0.
+	if focused == nil {
+		return
+	}
+	if idx := flatIndexOf(p.tree.Roots, focused); idx >= 0 {
+		p.tree.Focused = idx
+	}
+}
+
+// flatIndexOf returns the flattened-row index of target within roots,
+// walking in the same pre-order-honoring-Expanded sequence TreeView uses
+// to build its visible-row list. Returns -1 if target isn't reachable
+// (e.g. the user collapsed an ancestor while a load was in flight).
+func flatIndexOf(roots []*treeview.Node, target *treeview.Node) int {
+	i := 0
+	var walk func(n *treeview.Node) int
+	walk = func(n *treeview.Node) int {
+		if n == target {
+			return i
+		}
+		i++
+		if n.Expanded {
+			for _, c := range n.Children {
+				if idx := walk(c); idx >= 0 {
+					return idx
+				}
+			}
+		}
+		return -1
+	}
+	for _, r := range roots {
+		if idx := walk(r); idx >= 0 {
+			return idx
+		}
+	}
+	return -1
 }
 
 // onTreeSelect: highlighting a folder in the tree snaps the listing

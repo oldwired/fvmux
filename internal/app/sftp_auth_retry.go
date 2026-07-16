@@ -107,18 +107,22 @@ func (m *Mux) scheduleSftpRestore(alias string) {
 			if !alive {
 				return
 			}
-			// Direct sftp.Show — bypass openSftpBrowser to avoid its
-			// offerAuthThenRetry fallback. If the master is alive but
-			// SFTP somehow still fails, log and move on.
+			// Direct sftp.ShowAsync — bypass openSftpBrowser to avoid its
+			// offerAuthThenRetry fallback. If the master is alive but SFTP
+			// somehow still fails, log and move on. ShowAsync's onClose
+			// (→ Release) fires exactly once on every path, so do NOT
+			// Release again in onResolved — that would double-count and
+			// drive the alias refcount below its true value.
 			sock := m.sshPool.Acquire(alias)
-			// sftp.Show calls onClose (→ Release) itself on every error
-			// path, so do NOT Release again here — that would double-count
-			// and drive the alias refcount below its true value.
 			host := m.hostByAlias(alias)
-			if err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel, func() { m.sshPool.Release(alias) }); err != nil {
-				slog.Warn("session restore: sftp browser open failed",
-					"alias", alias, "err", err)
-			}
+			sftp.ShowAsync(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel,
+				func() { m.sshPool.Release(alias) },
+				func(err error) {
+					if err != nil {
+						slog.Warn("session restore: sftp browser open failed",
+							"alias", alias, "err", err)
+					}
+				})
 		})
 	}()
 }

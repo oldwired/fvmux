@@ -25,9 +25,14 @@ type Profile struct {
 	Command string            `toml:"command"`
 	Args    []string          `toml:"args"`
 	Env     map[string]string `toml:"env"`
-	CWD     string            `toml:"cwd"`    // "~" / "$VARS" expanded at Instantiate time
-	Title   string            `toml:"title"`  // initial pane title; OSC overrides
-	Layout  string            `toml:"layout"` // optional pre-split spec; ignored in step 4
+	CWD     string            `toml:"cwd"`   // "~" / "$VARS" expanded at Instantiate time
+	Title   string            `toml:"title"` // initial pane title; OSC overrides
+
+	// Layout, when non-empty, pre-splits the profile's window using the
+	// same DSL session snapshots use (see internal/layout/serde.go);
+	// each leaf names a profile. Invalid DSL degrades to a single pane
+	// with a warning.
+	Layout string `toml:"layout"`
 
 	// CloseOnExit, when true, automatically closes the pane after the
 	// child process exits. Default false — the pane stays visible with

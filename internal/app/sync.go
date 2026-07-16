@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
+	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/prefix"
@@ -45,8 +46,20 @@ func (m *Mux) broadcastIfSync(ev *drivers.Event) {
 			return
 		}
 		evCopy := saved
-		l.Pane.Term.HandleEvent(&evCopy)
+		m.sendSync(&evCopy, l.Pane.Term)
 	})
+}
+
+// sendSync delivers one broadcast event to a single synced pane's terminal.
+// Production feeds it to terminal.HandleEvent (fv-go does the PTY-byte
+// encoding); the syncSend override, when set, intercepts delivery so a test
+// can observe exactly which panes the sync gate reached.
+func (m *Mux) sendSync(ev *drivers.Event, t *terminal.Terminal) {
+	if m.syncSend != nil {
+		m.syncSend(ev, t)
+		return
+	}
+	t.HandleEvent(ev)
 }
 
 func (m *Mux) toggleSyncInput() {

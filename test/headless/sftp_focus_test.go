@@ -11,11 +11,12 @@ import (
 )
 
 // TestSftpBrowserOpenFocusesDialog guards the focus contract that
-// internal/sftp.Show depends on when it pops the browser.
+// internal/sftp.buildBrowser (via ShowAsync) depends on when it pops the
+// browser.
 //
 // The browser is a non-modal floating dialog inserted on top of whatever
 // window currently holds focus. On the auth-then-retry path that window
-// is the ssh pane the user just typed a passphrase into. Show's old
+// is the ssh pane the user just typed a passphrase into. The old
 // sequence was Insert(d) + MakeFirst(d) — but MakeFirst early-returns
 // when the view is already the last child, which Insert just made it, so
 // it left keyboard focus on the ssh pane and the freshly-spawned browser

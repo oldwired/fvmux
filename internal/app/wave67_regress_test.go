@@ -230,10 +230,20 @@ func TestDoSplitWith_SplitsFocusedPane(t *testing.T) {
 	}
 	origID := ws.Focus.Pane.ID
 
-	m.doSplitWith(catProf, true) // vertical split
+	m.doSplitWith(catProf, true) // fvmux "vertical" split → panes stacked
 
 	if ws.Root.Kind != layout.NodeSplit {
 		t.Fatalf("after doSplitWith, Root kind = %v, want a split", ws.Root.Kind)
+	}
+	// Orientation pin (finding #37): fvmux's "vertical split" stacks panes
+	// top/bottom, which fv-go models as a SplitHorizontal splitter (a
+	// horizontal divider bar). The layout algebra inverts the H/V names
+	// exactly once: doSplitWith(true) → SplitV → views.SplitHorizontal (see
+	// internal/layout/{node,ops}.go and fv-go's SplitOrientation constants).
+	// Asserting the concrete constant here stops a doc/comment edit elsewhere
+	// from silently flipping the split axis without a failing test.
+	if ws.Root.Orientation != views.SplitHorizontal {
+		t.Errorf("doSplitWith(vertical=true) Root.Orientation = %v, want views.SplitHorizontal (stacked)", ws.Root.Orientation)
 	}
 	leaves := ws.Root.CollectLeaves()
 	if len(leaves) != 2 {
@@ -249,6 +259,33 @@ func TestDoSplitWith_SplitsFocusedPane(t *testing.T) {
 		if l.Pane == nil || l.Pane.Term == nil {
 			t.Errorf("leaf %d missing a live terminal", i)
 		}
+	}
+
+	// The other axis: a second fresh window split with vertical=false must
+	// produce a side-by-side views.SplitVertical splitter (SplitH). Pinning
+	// both directions locks the full mapping, not just one leg.
+	w2, err := m.openWindowFromProfile(catProf)
+	if err != nil {
+		t.Fatalf("openWindowFromProfile (second window): %v", err)
+	}
+	ws2 := m.windows[w2.Self()]
+	if ws2 == nil {
+		t.Fatal("second window not registered in m.windows")
+	}
+	if m.currentWindow() != ws2 {
+		t.Fatalf("currentWindow() = %v, want the second window", m.currentWindow())
+	}
+	if ws2.Root.Kind != layout.NodeLeaf {
+		t.Fatalf("precondition: second fresh window should have a single leaf, got kind %v", ws2.Root.Kind)
+	}
+
+	m.doSplitWith(catProf, false) // fvmux "horizontal" split → panes side-by-side
+
+	if ws2.Root.Kind != layout.NodeSplit {
+		t.Fatalf("after doSplitWith(false), Root kind = %v, want a split", ws2.Root.Kind)
+	}
+	if ws2.Root.Orientation != views.SplitVertical {
+		t.Errorf("doSplitWith(vertical=false) Root.Orientation = %v, want views.SplitVertical (side-by-side)", ws2.Root.Orientation)
 	}
 }
 

@@ -25,13 +25,7 @@ func (m *Mux) ReloadConfig() {
 	paths := m.Opts.Paths
 
 	if cfg, err := config.Load(paths.ConfigFile()); err == nil {
-		m.Opts.Config = cfg
-		// The status bar copied ClockFormat once at Build time —
-		// forward the (possibly changed) format or "Reload Config"
-		// silently doesn't reload one of the settings it claims to.
-		if m.Opts.StatusBar != nil {
-			m.Opts.StatusBar.ClockFormat = cfg.Appearance.StatusClock
-		}
+		m.applyReloadedConfig(cfg)
 	} else {
 		slog.Warn("reload: config.toml", "err", err)
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
@@ -85,19 +79,6 @@ func (m *Mux) ReloadConfig() {
 
 	m.reloadThemesInternal()
 
-	// Re-apply window_shadow to already-open windows; new windows pick
-	// it up in registerWindow.
-	for _, ws := range m.windows {
-		if ws == nil || ws.Frame == nil {
-			continue
-		}
-		if m.Opts.Config.Appearance.WindowShadow {
-			ws.Frame.State |= consts.SfShadow
-		} else {
-			ws.Frame.State &^= consts.SfShadow
-		}
-	}
-
 	if m.Opts.RefreshUI != nil {
 		m.Opts.RefreshUI()
 	}
@@ -105,6 +86,34 @@ func (m *Mux) ReloadConfig() {
 	slog.Info("reload: done", "overrides", len(overrides))
 	msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
 		"Config reloaded.", msgbox.OKOnly)
+}
+
+// applyReloadedConfig swaps in the freshly-loaded config and forwards the
+// settings that live outside m.Opts.Config to their runtime owners: the
+// status bar's clock format (copied once at Build time) and window_shadow on
+// already-open frames (new windows pick it up in registerWindow). Split out
+// of ReloadConfig so it can be exercised without the trailing modal msgboxes —
+// pure state application, no UI/modal side effects.
+func (m *Mux) applyReloadedConfig(cfg *config.Config) {
+	m.Opts.Config = cfg
+	// The status bar copied ClockFormat once at Build time — forward the
+	// (possibly changed) format or "Reload Config" silently doesn't reload
+	// one of the settings it claims to.
+	if m.Opts.StatusBar != nil {
+		m.Opts.StatusBar.ClockFormat = cfg.Appearance.StatusClock
+	}
+	// Re-apply window_shadow to already-open windows; new windows pick it up
+	// in registerWindow.
+	for _, ws := range m.windows {
+		if ws == nil || ws.Frame == nil {
+			continue
+		}
+		if cfg.Appearance.WindowShadow {
+			ws.Frame.State |= consts.SfShadow
+		} else {
+			ws.Frame.State &^= consts.SfShadow
+		}
+	}
 }
 
 // ReloadThemes re-runs theme.All against the themes dir and re-applies

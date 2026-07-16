@@ -14,6 +14,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/markdown"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/taskprogress"
+	"github.com/oldwired/fv-go/pkg/fv/widgets/treeview"
 
 	pkgsftp "github.com/pkg/sftp"
 
@@ -89,48 +90,106 @@ func CloseAllBrowsers() {
 	}
 }
 
-// Show opens an SFTP browser modal against alias. Five regions:
-//
-//   - upper-left tree  : remote folders, lazy-expanded via OnExpand.
-//   - upper-left list  : remote cwd's contents (../ + folders + files).
-//   - lower-left tree  : local folders, rooted at $HOME.
-//   - lower-left list  : local cwd's contents.
-//   - right            : preview pane (markdown / hex / image),
-//     driven by whichever listing just highlighted
-//     a file.
-//
-// Bottom strip: TaskProgress widget for active transfers, then a hint
-// row + Close button.
-//
-// Tab cycles focus across the four panes (fv-go's standard
-// selectable-view rotation). F5 copies the file or folder highlighted
-// in the focused listing to the other side's cwd; F6 moves/renames it
-// (see move.go) — direction is derived from focus, so the same chords
-// work both ways. Del cancels the most
-// recent in-flight transfer. Enter in a listing dives into a folder
-// (../ goes up); Enter on a file is a no-op (preview is already current).
-// Show returns nil on success (browser is now on the desktop) or an
-// error from Open / Getwd. The caller — usually mux.sftpBrowser — is
-// responsible for surfacing the error to the user; ErrAuthRequired
-// in particular should be handled by offering to open an SSH pane
-// rather than just msgbox'ing.
-func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, parallel int, onClose func()) error {
+// connectResult bundles everything the blocking network phase produces
+// so the UI phase can build the dialog without any further round-trips.
+type connectResult struct {
+	client    *Client
+	remoteCwd string
+	tree      []*treeview.Node // initial remote folder tree.
+	listing   []*treeview.Node // initial remote cwd listing.
+}
+
+// connectFn performs the blocking network phase: spawn ssh, negotiate
+// SFTP, read the working directory and the first tree + listing. It is a
+// package var so tests can inject a fake connector (Open spawns a real
+// ssh subprocess, which a unit test can't).
+var connectFn = defaultConnect
+
+// buildBrowserFn is the UI-phase assembler; a package var so tests can
+// stub the (heavy, Application-dependent) dialog build and assert the
+// success routing in isolation.
+var buildBrowserFn = buildBrowser
+
+func defaultConnect(alias, controlPath string, hostOpts []string) (*connectResult, error) {
 	c, err := Open(alias, controlPath, hostOpts)
 	if err != nil {
-		if onClose != nil {
-			onClose()
-		}
-		return err
+		return nil, err
 	}
-
 	remoteCwd, err := c.SFTP().Getwd()
 	if err != nil {
 		_ = c.Close()
-		if onClose != nil {
-			onClose()
-		}
-		return fmt.Errorf("sftp getwd: %w", err)
+		return nil, fmt.Errorf("sftp getwd: %w", err)
 	}
+	return &connectResult{
+		client:    c,
+		remoteCwd: remoteCwd,
+		tree:      buildRemoteTree(c.SFTP(), remoteCwd),
+		listing:   buildRemoteListing(c.SFTP(), remoteCwd),
+	}, nil
+}
+
+// ShowAsync opens an SFTP browser against alias without ever blocking the
+// UI event goroutine. The network phase (ssh connect, SFTP negotiate,
+// Getwd, initial remote reads) runs on a background goroutine; the dialog
+// is constructed on the UI goroutine via views.CallSoon once the data
+// arrives. Opening a browser to a dead host therefore no longer freezes
+// the multiplexer for the connect timeout.
+//
+// Contract for the two callbacks — both invoked on the UI goroutine:
+//
+//   - onClose fires exactly once on every path. On success it fires when
+//     the browser dialog closes (threaded through d.OnClose); on a
+//     connect failure it fires immediately, before onResolved. Callers
+//     must NOT release the pool ref themselves.
+//   - onResolved fires when the connect attempt resolves: err == nil once
+//     the browser is on the desktop, err != nil on an Open/Getwd failure
+//     (the browser was not shown). Callers clear their "connecting" state
+//     here and branch on ErrAuthRequired — ssh refused because BatchMode
+//     wouldn't let it prompt, so the fix is to warm the ControlMaster in
+//     an interactive pane and retry, not to msgbox the raw error.
+//
+// The dialog layout (built in buildBrowser) has five regions: remote
+// folder tree + listing (upper-left), local folder tree + listing
+// (lower-left), and a shared preview pane on the right; a TaskProgress
+// strip and the action-button row run along the bottom.
+func ShowAsync(
+	a *fvapp.Application,
+	alias, controlPath string,
+	hostOpts []string,
+	parallel int,
+	onClose func(),
+	onResolved func(error),
+) {
+	go func() {
+		res, err := connectFn(alias, controlPath, hostOpts)
+		views.CallSoon(func() {
+			if err != nil {
+				if onClose != nil {
+					onClose() // exactly-once release on the failure path.
+				}
+				if onResolved != nil {
+					onResolved(err)
+				}
+				return
+			}
+			buildBrowserFn(a, alias, controlPath, hostOpts, parallel, res, onClose)
+			if onResolved != nil {
+				onResolved(nil) // browser is now on the desktop.
+			}
+		})
+	}()
+}
+
+// buildBrowser assembles the browser dialog from an already-connected
+// client. Runs on the UI goroutine (called from ShowAsync's CallSoon).
+// Tab cycles focus across the four panes; F5 copies the focused
+// listing's selection to the other side, F6 moves/renames it (direction
+// derived from focus), Del cancels the newest in-flight transfer; Enter
+// in a listing dives into a folder (../ goes up), Enter on a file is a
+// no-op (its preview is already current).
+func buildBrowser(a *fvapp.Application, alias, controlPath string, hostOpts []string, parallel int, res *connectResult, onClose func()) {
+	c := res.client
+	remoteCwd := res.remoteCwd
 	localCwd := defaultLocalRoot()
 
 	desk := a.Desktop.BaseView()
@@ -193,6 +252,7 @@ func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, pa
 	remote := newPanel(d, true, c.SFTP(), remoteCwd, remoteHeader, listX1-treeX0,
 		geom.NewRect(treeX0, 2, treeX1, midY),
 		geom.NewRect(listX0, 2, listX1, midY),
+		res.tree, res.listing, // initial reads already done off the UI goroutine.
 	)
 	// Local panel (lower-left). The tree + listing grow vertically
 	// so extra Y is consumed by the local side. The local header
@@ -200,6 +260,7 @@ func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, pa
 	local := newPanel(d, false, nil, localCwd, localHeader, listX1-treeX0,
 		geom.NewRect(treeX0, midY+1, treeX1, areaBottom),
 		geom.NewRect(listX0, midY+1, listX1, areaBottom),
+		buildLocalTree(localCwd), buildLocalListing(localCwd), // local reads don't block.
 	)
 	local.tree.GrowMode = consts.GfGrowHiY
 	local.listing.GrowMode = consts.GfGrowHiY
@@ -356,7 +417,6 @@ func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, pa
 	a.Desktop.Insert(d)
 	a.Desktop.MakeFirst(d) // raise z-order (no-op when d is already last).
 	a.Desktop.Focus(d)     // …and actually take keyboard focus.
-	return nil
 }
 
 // previewPane owns the swappable widget on the right side of the

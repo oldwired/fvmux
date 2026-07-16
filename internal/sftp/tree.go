@@ -42,21 +42,11 @@ func buildRemoteTree(s *pkgsftp.Client, cwd string) []*treeview.Node {
 	return out
 }
 
-// expandRemoteTree lazily populates n's child folders. No-op for
-// already-expanded or non-directory nodes.
-func expandRemoteTree(s *pkgsftp.Client, n *treeview.Node) {
-	if n == nil || len(n.Children) > 0 {
-		return
-	}
-	e, ok := n.Data.(*fileEntry)
-	if !ok || !e.IsDir {
-		return
-	}
-	for _, child := range buildRemoteTree(s, e.Path) {
-		child.Parent = n
-		n.Children = append(n.Children, child)
-	}
-}
+// Remote tree expansion is asynchronous — see panel.expandRemoteAsync.
+// A synchronous ReadDir here would block the UI event goroutine for the
+// length of a slow-link round-trip or a dead-host TCP timeout, freezing
+// every window the instant the user expands a collapsed remote folder.
+// The local mirror below stays synchronous: the local FS doesn't block.
 
 // buildLocalTree is the local-FS mirror of buildRemoteTree.
 func buildLocalTree(dir string) []*treeview.Node {
@@ -86,7 +76,10 @@ func buildLocalTree(dir string) []*treeview.Node {
 	return out
 }
 
-// expandLocalTree is the local-FS mirror of expandRemoteTree.
+// expandLocalTree lazily populates a local folder node's child folders.
+// Stays synchronous (unlike the remote side's expandRemoteAsync): the
+// local FS doesn't block the UI goroutine. No-op for already-expanded or
+// non-directory nodes.
 func expandLocalTree(n *treeview.Node) {
 	if n == nil || len(n.Children) > 0 {
 		return

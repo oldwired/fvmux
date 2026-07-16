@@ -334,8 +334,9 @@ prefix_key         = "C-g"      # set by the first-run wizard.
 default_profile    = "shell"
 confirm_kill       = true       # ask before killing live panes / quitting.
 splash_enabled     = true
-connect_split      = "vertical" # Ctrl-G H: "vertical"/"horizontal" split the
-                                # focused pane; "window" opens a floating window.
+connect_split      = "vertical" # Ctrl-G H: "vertical" stacks the new pane below
+                                # (like Ctrl-G "), "horizontal" places it beside
+                                # (like Ctrl-G %); "window" opens a floating window.
 new_window_command = ""         # non-empty ⇒ Ctrl-G c runs this via the system
                                 # shell (sh -c; cmd /c on Windows); empty ⇒
                                 # default_profile.

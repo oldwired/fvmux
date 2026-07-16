@@ -179,6 +179,92 @@ func TestPrefix_SuspendedPassesThrough(t *testing.T) {
 	}
 }
 
+// TestPrefix_DisabledChordConsumesWithoutFiring is the regression for finding
+// #24: a chord bound to a command whose Enabled predicate returns false must
+// still CONSUME its second keystroke (ev.Clear) so the key can't leak into the
+// focused pane — while NOT running the disabled Action. (The concrete bug: a
+// disabled `C-g D` typed a literal 'D' at the shell prompt.)
+func TestPrefix_DisabledChordConsumesWithoutFiring(t *testing.T) {
+	r := commands.New()
+	var fired bool
+	r.Register(&commands.Command{
+		ID:      1,
+		Name:    "Disabled Cmd",
+		Chord:   "C-g D",
+		Enabled: func(*commands.Ctx) bool { return false },
+		Action:  func(*commands.Ctx) { fired = true },
+	})
+	v := New(r, &commands.Ctx{}, Default)
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	ev := keyEvent(0, 'D')
+	v.HandleEvent(ev)
+
+	if fired {
+		t.Fatal("a disabled command's Action must not run")
+	}
+	if ev.What != consts.EvNothing {
+		t.Fatalf("a bound-but-disabled chord must still consume its key; ev.What = %#x, want EvNothing (%#x)",
+			ev.What, consts.EvNothing)
+	}
+	if v.Armed() {
+		t.Fatal("prefix should disarm after a bound-but-disabled chord")
+	}
+}
+
+// TestPrefix_EnabledChordRunsAndConsumes is the mirror of the disabled case:
+// an enabled command both runs its Action and consumes the keystroke.
+func TestPrefix_EnabledChordRunsAndConsumes(t *testing.T) {
+	r := commands.New()
+	var fired bool
+	r.Register(&commands.Command{
+		ID:      1,
+		Name:    "Enabled Cmd",
+		Chord:   "C-g D",
+		Enabled: func(*commands.Ctx) bool { return true },
+		Action:  func(*commands.Ctx) { fired = true },
+	})
+	v := New(r, &commands.Ctx{}, Default)
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	ev := keyEvent(0, 'D')
+	v.HandleEvent(ev)
+
+	if !fired {
+		t.Fatal("an enabled command's Action should run")
+	}
+	if ev.What != consts.EvNothing {
+		t.Fatalf("a fired chord must consume its key; ev.What = %#x, want EvNothing (%#x)",
+			ev.What, consts.EvNothing)
+	}
+}
+
+// TestPrefix_UnboundChordPassesThrough documents the passthrough contract: a
+// second key that forms a chord string with no registry binding is left
+// untouched (NOT consumed) so it reaches the focused view.
+func TestPrefix_UnboundChordPassesThrough(t *testing.T) {
+	r := commands.New()
+	r.Register(&commands.Command{
+		ID:     1,
+		Name:   "Bound Cmd",
+		Chord:  "C-g D",
+		Action: func(*commands.Ctx) {},
+	})
+	v := New(r, &commands.Ctx{}, Default)
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	ev := keyEvent(0, 'Q') // forms "C-g Q" — not bound
+	v.HandleEvent(ev)
+
+	if ev.What != consts.EvKeyboard {
+		t.Fatalf("an unbound chord's second key must pass through (not be consumed); ev.What = %#x, want EvKeyboard (%#x)",
+			ev.What, consts.EvKeyboard)
+	}
+	if v.Armed() {
+		t.Fatal("prefix should disarm after an unbound second key")
+	}
+}
+
 func TestRecordPress_OutsideWindowDoesNotFire(t *testing.T) {
 	v := &View{}
 	var fired int
