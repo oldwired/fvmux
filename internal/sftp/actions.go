@@ -109,13 +109,23 @@ func mkdirAction(a *fvapp.Application, p *panel) {
 			"%s.", []any{err.Error()}, msgbox.OKOnly)
 		return
 	}
-	var err error
 	if p.isRemote {
-		err = p.c.MkdirAll(joinRemote(p.cwd, name))
-	} else {
-		err = os.MkdirAll(filepath.Join(p.cwd, name), 0o755)
+		// Off the UI goroutine — a slow link must not freeze the
+		// multiplexer for the length of a remote round-trip.
+		path := joinRemote(p.cwd, name)
+		p.asyncRemoteOp(
+			func() error { return p.c.MkdirAll(path) },
+			func(err error) {
+				if err != nil {
+					msgbox.Showf(&a.Desktop.Group, msgbox.Error,
+						"mkdir failed: %s", []any{err.Error()}, msgbox.OKOnly)
+					return
+				}
+				p.refresh()
+			})
+		return
 	}
-	if err != nil {
+	if err := os.MkdirAll(filepath.Join(p.cwd, name), 0o755); err != nil {
 		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
 			"mkdir failed: %s", []any{err.Error()}, msgbox.OKOnly)
 		return
@@ -160,18 +170,28 @@ func deleteAction(a *fvapp.Application, p *panel, listingFocused bool) {
 		return
 	}
 
-	var err error
 	if e.Local {
-		err = os.RemoveAll(e.Path)
-	} else {
-		err = p.c.RemoveAll(e.Path)
+		err := os.RemoveAll(e.Path)
+		// Refresh either way: a partial delete still changes the listing.
+		p.refresh()
+		if err != nil {
+			msgbox.Showf(&a.Desktop.Group, msgbox.Error,
+				"delete failed: %s", []any{err.Error()}, msgbox.OKOnly)
+		}
+		return
 	}
-	// Refresh either way: a partial delete still changes the listing.
-	p.refresh()
-	if err != nil {
-		msgbox.Showf(&a.Desktop.Group, msgbox.Error,
-			"delete failed: %s", []any{err.Error()}, msgbox.OKOnly)
-	}
+	// Remote recursive delete walks the tree server-round-trip by
+	// round-trip — run it off the UI goroutine so a slow or dropped
+	// link can't freeze every window until the TCP timeout.
+	p.asyncRemoteOp(
+		func() error { return p.c.RemoveAll(e.Path) },
+		func(err error) {
+			p.refresh()
+			if err != nil {
+				msgbox.Showf(&a.Desktop.Group, msgbox.Error,
+					"delete failed: %s", []any{err.Error()}, msgbox.OKOnly)
+			}
+		})
 }
 
 // currentListingEntry returns the fileEntry under the listing's

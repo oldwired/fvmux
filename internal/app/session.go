@@ -14,7 +14,6 @@ import (
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
-	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
 // SaveSession captures the current window/layout state to TOML under
@@ -189,20 +188,8 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 // back to the default shell profile.
 func (m *Mux) resolveProfileFallback(name string) *profile.Profile {
 	if name != "" && m.sshPool != nil {
-		if hosts, _ := sshmgr.Load(m.Opts.Paths.HostsFile()); len(hosts) > 0 {
-			for _, h := range hosts {
-				if h != nil && h.Alias == name {
-					sock := m.sshPool.Acquire(h.Alias)
-					args := append([]string{}, sshmgr.ControlOpts(sock)...)
-					args = append(args, h.Alias)
-					return &profile.Profile{
-						Name:    h.Alias,
-						Command: "ssh",
-						Args:    args,
-						Title:   h.Alias,
-					}
-				}
-			}
+		if h := m.hostByAlias(name); h != nil {
+			return m.sshProfile(h, h.Alias)
 		}
 	}
 	return profile.Defaults()[0]
@@ -212,6 +199,7 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 	w := views.NewWindow(bounds, ws.Title, ws.Number)
 	interior := windowInterior(w)
 
+	var spawned []*session.Pane
 	spawn := func(spec layout.LeafSpec) (*session.Pane, error) {
 		prof := profile.Find(m.Opts.Profiles, spec.Profile)
 		if prof == nil {
@@ -222,10 +210,11 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 			// generic shells.
 			prof = m.resolveProfileFallback(spec.Profile)
 		}
-		pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+		pane, err := m.instantiateProfile(prof, interior)
 		if err != nil {
 			return nil, err
 		}
+		spawned = append(spawned, pane)
 		if spec.Title != "" {
 			pane.Title = spec.Title
 		}
@@ -235,6 +224,11 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 
 	root, err := layout.Unmarshal(ws.Layout, spawn)
 	if err != nil {
+		// Stop whatever panes spawned before the failure — a failed
+		// window must not leak PTYs (or the ssh pool refs they own).
+		for _, p := range spawned {
+			m.stopPane(p)
+		}
 		return err
 	}
 	if root == nil {

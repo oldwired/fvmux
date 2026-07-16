@@ -138,11 +138,12 @@ func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
 
 // EnableDedicatedTransfers wires StartDedicated to open a real per-transfer
 // ssh subprocess for the manager's alias, reusing controlPath's master.
-// The browser calls this after constructing the manager; tests inject
+// hostOpts carries hosts.toml connection overrides (see Open). The
+// browser calls this after constructing the manager; tests inject
 // their own opener instead.
-func (m *Manager) EnableDedicatedTransfers(controlPath string) {
+func (m *Manager) EnableDedicatedTransfers(controlPath string, hostOpts []string) {
 	m.openDedicated = func() (dedicatedConn, error) {
-		c, err := Open(m.Alias, controlPath)
+		c, err := Open(m.Alias, controlPath, hostOpts)
 		if err != nil {
 			return nil, err
 		}

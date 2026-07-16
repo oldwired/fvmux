@@ -35,6 +35,9 @@ type Client struct {
 // Open spawns ssh and negotiates an SFTP session against alias.
 // controlPath, when non-empty, threads ControlMaster=auto +
 // ControlPath=<sock> so the session reuses a master if one is up.
+// hostOpts carries a hosts.toml entry's HostName/User/Port overrides
+// (sshmgr.Host.ConnectOpts) — without them a standalone hosts.toml
+// host is unconnectable because the bare alias isn't a hostname.
 //
 // The ssh subprocess runs without a controlling TTY (this is a pipe-
 // based subsystem call, not an interactive shell), so we force
@@ -43,9 +46,10 @@ type Client struct {
 // require interaction, ssh fails immediately and the surfaced error
 // tells the user to authenticate via Ctrl-G H first (that path runs
 // inside a real PTY pane where prompts are renderable).
-func Open(alias, controlPath string) (*Client, error) {
+func Open(alias, controlPath string, hostOpts []string) (*Client, error) {
 	args := []string{}
 	args = append(args, sshmgr.ControlOpts(controlPath)...)
+	args = append(args, hostOpts...)
 	args = append(args, "-o", "BatchMode=yes")
 	args = append(args, "-s", alias, "sftp")
 	cmd := exec.Command("ssh", args...)

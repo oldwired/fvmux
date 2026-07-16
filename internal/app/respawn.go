@@ -31,7 +31,7 @@ func (m *Mux) respawnPane() {
 		prof = m.resolveProfileFallback(pane.Profile)
 	}
 	interior := windowInterior(ws.Frame)
-	newPane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+	newPane, err := m.instantiateProfile(prof, interior)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't respawn %s:\n%s",

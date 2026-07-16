@@ -82,18 +82,26 @@ func (h *keyHandler) renameInPlace(p *panel, e *fileEntry, newName string) {
 	if newName == filepath.Base(e.Path) {
 		return // no-op rename.
 	}
-	var err error
 	if e.Local {
-		err = os.Rename(e.Path, filepath.Join(p.cwd, newName))
-	} else {
-		err = p.c.Rename(e.Path, joinRemote(p.cwd, newName))
-	}
-	if err != nil {
-		msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-			"rename failed: %s", []any{err.Error()}, msgbox.OKOnly)
+		if err := os.Rename(e.Path, filepath.Join(p.cwd, newName)); err != nil {
+			msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
+				"rename failed: %s", []any{err.Error()}, msgbox.OKOnly)
+			return
+		}
+		p.refresh()
 		return
 	}
-	p.refresh()
+	dest := joinRemote(p.cwd, newName)
+	h.async(
+		func() error { return p.c.Rename(e.Path, dest) },
+		func(err error) {
+			if err != nil {
+				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
+					"rename failed: %s", []any{err.Error()}, msgbox.OKOnly)
+				return
+			}
+			p.refresh()
+		})
 }
 
 // moveToOther moves e onto the other panel's host at dest (a cross-host
@@ -113,6 +121,10 @@ func (h *keyHandler) moveToOther(active, other *panel, e *fileEntry, dest string
 		})
 	}
 
+	// Every remote round-trip below (Stat existence checks, the
+	// StartTree* walks, StartDedicated's session open) runs through
+	// h.async — never on the UI event goroutine (#13). Confirmation
+	// dialogs stay on the UI goroutine, between the async legs.
 	if active.isRemote {
 		// Remote → local: download, then delete the remote source.
 		local := filepath.Clean(dest)
@@ -130,17 +142,19 @@ func (h *keyHandler) moveToOther(active, other *panel, e *fileEntry, dest string
 			if h.localExists(local) && !h.confirmMerge(local) {
 				return
 			}
-			if _, err := h.mgr.StartTreeMove(active.c, Download, local, e.Path, rm); err != nil {
-				h.moveErr(err)
-			}
+			h.async(func() error {
+				_, err := h.mgr.StartTreeMove(active.c, Download, local, e.Path, rm)
+				return err
+			}, h.moveDone)
 			return
 		}
 		if h.localExists(local) && !h.confirmOverwrite(local) {
 			return
 		}
-		if _, err := h.mgr.StartDedicated(active.c, Download, local, e.Path, rm); err != nil {
-			h.moveErr(err)
-		}
+		h.async(func() error {
+			_, err := h.mgr.StartDedicated(active.c, Download, local, e.Path, rm)
+			return err
+		}, h.moveDone)
 		return
 	}
 
@@ -151,21 +165,29 @@ func (h *keyHandler) moveToOther(active, other *panel, e *fileEntry, dest string
 		refreshBoth()
 		return err
 	}
-	if e.IsDir {
-		if h.remoteExists(other.c, remote) && !h.confirmMerge(remote) {
+	var exists bool
+	h.async(func() error {
+		exists = h.remoteExists(other.c, remote)
+		return nil
+	}, func(error) {
+		if e.IsDir {
+			if exists && !h.confirmMerge(remote) {
+				return
+			}
+			h.async(func() error {
+				_, err := h.mgr.StartTreeMove(other.c, Upload, e.Path, remote, rm)
+				return err
+			}, h.moveDone)
 			return
 		}
-		if _, err := h.mgr.StartTreeMove(other.c, Upload, e.Path, remote, rm); err != nil {
-			h.moveErr(err)
+		if exists && !h.confirmOverwrite(remote) {
+			return
 		}
-		return
-	}
-	if h.remoteExists(other.c, remote) && !h.confirmOverwrite(remote) {
-		return
-	}
-	if _, err := h.mgr.StartDedicated(other.c, Upload, e.Path, remote, rm); err != nil {
-		h.moveErr(err)
-	}
+		h.async(func() error {
+			_, err := h.mgr.StartDedicated(other.c, Upload, e.Path, remote, rm)
+			return err
+		}, h.moveDone)
+	})
 }
 
 func (h *keyHandler) localExists(p string) bool {
@@ -181,4 +203,12 @@ func (h *keyHandler) remoteExists(c *pkgsftp.Client, p string) bool {
 func (h *keyHandler) moveErr(err error) {
 	msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
 		"Move failed: %s", []any{err.Error()}, msgbox.OKOnly)
+}
+
+// moveDone is the async completion for the move legs: surfaces the
+// error, if any (successful moves refresh via refreshBoth/transferTicker).
+func (h *keyHandler) moveDone(err error) {
+	if err != nil {
+		h.moveErr(err)
+	}
 }

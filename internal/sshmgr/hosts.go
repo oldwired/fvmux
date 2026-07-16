@@ -263,6 +263,31 @@ func loadHostsTOML(path string) ([]*Host, error) {
 	return out, nil
 }
 
+// ConnectOpts returns the ssh -o overrides carrying the connection
+// fields a hosts.toml entry declares (HostName/User/Port). Every
+// connect path must splice these into its ssh argv: without them a
+// standalone hosts.toml host is dialled by its bare alias — which
+// isn't a resolvable hostname — while the picker displays the very
+// user@host:port being ignored. ssh_config-sourced hosts return nil;
+// ssh itself applies their fields (re-passing them could fight Match
+// blocks). Nil-safe.
+func (h *Host) ConnectOpts() []string {
+	if h == nil || h.Source != "hosts.toml" {
+		return nil
+	}
+	var out []string
+	if h.Hostname != "" {
+		out = append(out, "-o", "HostName="+h.Hostname)
+	}
+	if h.User != "" {
+		out = append(out, "-o", "User="+h.User)
+	}
+	if h.Port != "" && h.Port != "0" {
+		out = append(out, "-o", "Port="+h.Port)
+	}
+	return out
+}
+
 // DisplayRow returns a single-line label suitable for the fuzzy picker.
 func (h *Host) DisplayRow() string {
 	var b strings.Builder

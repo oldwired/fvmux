@@ -10,9 +10,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 
-	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/sftp"
-	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
 // offerAuthThenRetry is the auth-required recovery flow. SFTP refused
@@ -37,18 +35,11 @@ func (m *Mux) offerAuthThenRetry(alias string) {
 	}
 
 	// Spawn the interactive ssh pane through the pool so it uses the
-	// same control socket we'll watch.
-	sock := m.sshPool.Acquire(alias)
-	args := append([]string{}, sshmgr.ControlOpts(sock)...)
-	args = append(args, alias)
-	prof := &profile.Profile{
-		Name:    alias,
-		Command: "ssh",
-		Args:    args,
-		Title:   alias,
-	}
+	// same control socket we'll watch. The pane owns its pool ref
+	// (released by stopPane when it closes, or by instantiateProfile
+	// on spawn failure).
+	prof := m.sshProfile(m.hostByAlias(alias), alias)
 	if _, err := m.openWindowFromProfile(prof); err != nil {
-		m.sshPool.Release(alias)
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"ssh %s failed:\n%s", []any{alias, err.Error()}, msgbox.OKOnly)
 		return
@@ -58,8 +49,10 @@ func (m *Mux) offerAuthThenRetry(alias string) {
 	// goroutine via views.CallSoon. Bounded: gives up after 30 s so
 	// a failed auth doesn't leak a forever-goroutine. Registered with
 	// sftpRestore so a session switch cancels a stale poll (otherwise it
-	// could pop a browser into the wrong session). The Acquire above is
-	// paired with a Release on whichever exit path runs.
+	// could pop a browser into the wrong session). This Acquire is the
+	// poll's own ref, paired with the Release on whichever exit path
+	// runs inside the CallSoon.
+	sock := m.sshPool.Acquire(alias)
 	cancel := m.sftpRestore.start(alias)
 	go func() {
 		defer m.sftpRestore.finish(alias, cancel)
@@ -121,7 +114,8 @@ func (m *Mux) scheduleSftpRestore(alias string) {
 			// sftp.Show calls onClose (→ Release) itself on every error
 			// path, so do NOT Release again here — that would double-count
 			// and drive the alias refcount below its true value.
-			if err := sftp.Show(m.App, alias, sock, func() { m.sshPool.Release(alias) }); err != nil {
+			host := m.hostByAlias(alias)
+			if err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), func() { m.sshPool.Release(alias) }); err != nil {
 				slog.Warn("session restore: sftp browser open failed",
 					"alias", alias, "err", err)
 			}

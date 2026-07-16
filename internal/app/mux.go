@@ -437,7 +437,8 @@ func (m *Mux) openSftpBrowser(alias string) {
 	// thread it through the onClose callback Show invokes from
 	// d.OnClose.
 	sock := m.sshPool.Acquire(alias)
-	err := sftp.Show(m.App, alias, sock, func() { m.sshPool.Release(alias) })
+	host := m.hostByAlias(alias)
+	err := sftp.Show(m.App, alias, sock, host.ConnectOpts(), func() { m.sshPool.Release(alias) })
 	if err == nil {
 		return
 	}
@@ -466,15 +467,7 @@ func (m *Mux) connectHost() {
 	// none is up yet, else it piggy-backs. Either way the auth flow
 	// runs inside this PTY pane — the password prompt (if any) lands
 	// in the pane rather than corrupting fvmux's display.
-	sock := m.sshPool.Acquire(h.Alias)
-	args := append([]string{}, sshmgr.ControlOpts(sock)...)
-	args = append(args, h.Alias)
-	prof := &profile.Profile{
-		Name:    h.Alias,
-		Command: "ssh",
-		Args:    args,
-		Title:   h.Alias,
-	}
+	prof := m.sshProfile(h, h.Alias)
 	_, err := m.openWindowFromProfile(prof)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
@@ -488,7 +481,7 @@ func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error
 	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
 	w := views.NewWindow(bounds, prof.Title, len(m.windowOrder)+1)
 	interior := windowInterior(w)
-	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+	pane, err := m.instantiateProfile(prof, interior)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +543,7 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	w := views.NewWindow(bounds, prof.Name, len(m.windowOrder)+1)
 	interior := windowInterior(w)
 
-	pane, err := profile.Instantiate(prof, interior, m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+	pane, err := m.instantiateProfile(prof, interior)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't start %s:\n%s",
@@ -839,7 +832,7 @@ func (m *Mux) doSplit(vertical bool) {
 	if prof == nil {
 		prof = profile.Defaults()[0]
 	}
-	newPane, err := profile.Instantiate(prof, geom.NewRect(0, 0, 40, 12), m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+	newPane, err := m.instantiateProfile(prof, geom.NewRect(0, 0, 40, 12))
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't start %s:\n%s",
@@ -1100,7 +1093,17 @@ func paneIsAlive(p *session.Pane) bool {
 // stay installed desktop-wide, eating keys on behalf of a stopped pane.
 // Every path that stops a pane's PTY must come through here.
 func (m *Mux) stopPane(pane *session.Pane) {
-	if pane == nil || pane.Term == nil {
+	if pane == nil {
+		return
+	}
+	// The pane owns one pool ref when it was spawned through sshProfile
+	// — release exactly once (stopPane can run twice for the same pane:
+	// doClose stops it, then cleanupWindow's leaf walk sees it again).
+	if pane.SSHAlias != "" && m.sshPool != nil {
+		m.sshPool.Release(pane.SSHAlias)
+		pane.SSHAlias = ""
+	}
+	if pane.Term == nil {
 		return
 	}
 	if m.copyMode.Active() && m.copyMode.Term() == pane.Term {

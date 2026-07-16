@@ -222,6 +222,8 @@ func (h *keyHandler) copyAcross() {
 		return
 	}
 
+	// Remote round-trips (Stat checks, dedicated-session opens, tree
+	// walks) run through h.async — off the UI event goroutine (#13).
 	if active.isRemote {
 		// Remote → local download.
 		dst := filepath.Join(other.cwd, filepath.Base(e.Path))
@@ -232,10 +234,15 @@ func (h *keyHandler) copyAcross() {
 		if _, err := os.Stat(dst); err == nil && !h.confirmOverwrite(dst) {
 			return
 		}
-		if _, err := h.mgr.StartDedicated(active.c, Download, dst, e.Path, nil); err != nil {
-			msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-				"Download failed: %s", []any{err.Error()}, msgbox.OKOnly)
-		}
+		h.async(func() error {
+			_, err := h.mgr.StartDedicated(active.c, Download, dst, e.Path, nil)
+			return err
+		}, func(err error) {
+			if err != nil {
+				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
+					"Download failed: %s", []any{err.Error()}, msgbox.OKOnly)
+			}
+		})
 		return
 	}
 	// Local → remote upload.
@@ -249,13 +256,34 @@ func (h *keyHandler) copyAcross() {
 			"Can't read %s: %s", []any{e.Path, err.Error()}, msgbox.OKOnly)
 		return
 	}
-	if _, err := other.c.Stat(dst); err == nil && !h.confirmOverwrite(dst) {
-		return
-	}
-	if _, err := h.mgr.StartDedicated(other.c, Upload, e.Path, dst, nil); err != nil {
-		msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-			"Upload failed: %s", []any{err.Error()}, msgbox.OKOnly)
-	}
+	var exists bool
+	h.async(func() error {
+		_, err := other.c.Stat(dst)
+		exists = err == nil
+		return nil
+	}, func(error) {
+		if exists && !h.confirmOverwrite(dst) {
+			return
+		}
+		h.async(func() error {
+			_, err := h.mgr.StartDedicated(other.c, Upload, e.Path, dst, nil)
+			return err
+		}, func(err error) {
+			if err != nil {
+				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
+					"Upload failed: %s", []any{err.Error()}, msgbox.OKOnly)
+			}
+		})
+	})
+}
+
+// async runs op off the UI goroutine and calls done back on it. Every
+// remote SFTP round-trip in an action must go through here — a slow or
+// dropped link would otherwise freeze the whole multiplexer until the
+// TCP timeout. Tracked via the remote panel so browser teardown drains
+// in-flight ops before closing the shared client.
+func (h *keyHandler) async(op func() error, done func(error)) {
+	h.remote.asyncRemoteOp(op, done)
 }
 
 // copyDir recursively copies a directory across panes. srcRoot is the
@@ -265,34 +293,47 @@ func (h *keyHandler) copyAcross() {
 // destination panel, refreshed directly when the tree holds no files
 // (the transferTicker only refreshes after a file transfer completes).
 func (h *keyHandler) copyDir(c *pkgsftp.Client, dir Direction, srcRoot, dst string, destRemote bool, other *panel) {
-	exists := false
-	if destRemote {
-		_, err := c.Stat(dst)
-		exists = err == nil
-	} else {
-		_, err := os.Stat(dst)
-		exists = err == nil
-	}
-	if exists && !h.confirmMerge(dst) {
-		return
-	}
-
-	var localRoot, remoteRoot string
-	switch dir {
-	case Upload: // local srcRoot → remote dst
-		localRoot, remoteRoot = srcRoot, dst
-	case Download: // remote srcRoot → local dst
-		remoteRoot, localRoot = srcRoot, dst
-	}
-	n, err := h.mgr.StartTree(c, dir, localRoot, remoteRoot)
-	if err != nil {
-		msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-			"Copy folder failed: %s", []any{err.Error()}, msgbox.OKOnly)
-		return
-	}
-	if n == 0 && other != nil {
-		other.refresh()
-	}
+	// Existence probe, confirm, then the tree walk — the probe and the
+	// walk are remote round-trips (the walk can be thousands on a deep
+	// tree), so both legs run through h.async with the modal confirm
+	// sandwiched on the UI goroutine.
+	var exists bool
+	h.async(func() error {
+		if destRemote {
+			_, err := c.Stat(dst)
+			exists = err == nil
+		} else {
+			_, err := os.Stat(dst)
+			exists = err == nil
+		}
+		return nil
+	}, func(error) {
+		if exists && !h.confirmMerge(dst) {
+			return
+		}
+		var localRoot, remoteRoot string
+		switch dir {
+		case Upload: // local srcRoot → remote dst
+			localRoot, remoteRoot = srcRoot, dst
+		case Download: // remote srcRoot → local dst
+			remoteRoot, localRoot = srcRoot, dst
+		}
+		var n int
+		h.async(func() error {
+			var err error
+			n, err = h.mgr.StartTree(c, dir, localRoot, remoteRoot)
+			return err
+		}, func(err error) {
+			if err != nil {
+				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
+					"Copy folder failed: %s", []any{err.Error()}, msgbox.OKOnly)
+				return
+			}
+			if n == 0 && other != nil {
+				other.refresh()
+			}
+		})
+	})
 }
 
 // confirmOverwrite asks before clobbering an existing destination,

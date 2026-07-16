@@ -130,6 +130,36 @@ func (p *panel) refresh() {
 	}
 }
 
+// asyncRemoteOp runs op off the UI goroutine and calls done back on it
+// (via views.CallSoon) with op's error. Every remote mutation (F7
+// mkdir, F8 delete, F6 move/rename, F5 tree walks and dedicated-session
+// opens) must go through here: a synchronous SFTP round-trip on the UI
+// event goroutine freezes the entire multiplexer for the length of a
+// slow operation or dead-link TCP timeout. Tracked by p.refreshWG so
+// the browser's teardown drains in-flight ops before closing the shared
+// client; a no-op once the browser is closing, and done is skipped if
+// it closed while op ran.
+func (p *panel) asyncRemoteOp(op func() error, done func(error)) {
+	if p.closed != nil && p.closed.Load() {
+		return
+	}
+	if p.refreshWG != nil {
+		p.refreshWG.Add(1)
+	}
+	go func() {
+		if p.refreshWG != nil {
+			defer p.refreshWG.Done()
+		}
+		err := op()
+		views.CallSoon(func() {
+			if p.closed != nil && p.closed.Load() {
+				return
+			}
+			done(err)
+		})
+	}()
+}
+
 // requestRemoteRefresh schedules an off-thread reload of cwd's remote
 // listing. At most one network read runs at a time; a request arriving
 // while one is in flight records the newest cwd and reruns when the

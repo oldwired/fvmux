@@ -45,6 +45,13 @@ type Profile struct {
 	// for panes spawned from this profile. 0 falls back to that
 	// setting; if both are 0, fv-go's built-in default applies.
 	ScrollbackLines int `toml:"scrollback_lines"`
+
+	// SSHAlias marks a synthesized interactive-ssh profile (never set
+	// from profiles.toml): the profile was built via an SSH pool
+	// Acquire for this alias, and the pane spawned from it owns that
+	// refcount — app.stopPane releases it when the pane's terminal
+	// stops, and spawn-failure paths release it directly.
+	SSHAlias string `toml:"-"`
 }
 
 type profilesFile struct {
@@ -167,6 +174,7 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShe
 		Term:        t,
 		Title:       title,
 		Profile:     p.Name,
+		SSHAlias:    p.SSHAlias,
 		CloseOnExit: p.CloseOnExit,
 	}, nil
 }

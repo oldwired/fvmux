@@ -42,6 +42,12 @@ type Pane struct {
 	Title   string
 	Profile string // empty for ad-hoc spawns
 
+	// SSHAlias, when non-empty, records that this pane holds one SSH
+	// pool refcount for the alias (interactive ssh spawned through the
+	// pool). app.stopPane releases it exactly once when the pane's
+	// terminal stops. Runtime state — never serialized.
+	SSHAlias string
+
 	// CloseOnExit, copied from the source profile, asks the Mux to
 	// remove the pane (and possibly the window) as soon as the child
 	// process exits — set by per-profile config, default off.
