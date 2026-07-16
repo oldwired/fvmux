@@ -8,17 +8,16 @@ import (
 	"github.com/oldwired/fvmux/internal/sftp"
 )
 
-// transferHintUpload / transferHintDownload run when the user invokes
-// the menu/palette entries from outside an open SFTP browser. The
-// transfer actions are scoped to the browser's Copy button / F5 key;
-// these stubs nudge the user toward the right surface rather than
-// no-oping silently.
+// transferHintUpload / transferHintDownload run when the user invokes the
+// Move (F6) / Copy (F5) menu-palette entries from outside an open SFTP
+// browser. Both keys work in either direction on the highlighted entry, so
+// these stubs point at the browser rather than no-oping silently.
 func (m *Mux) transferHintUpload() {
-	m.transferHint("Upload", "Use the Copy button (or F5) inside the SFTP browser, with focus on a local listing entry.")
+	m.transferHint("Move / Rename", "Highlight a file or folder in either listing, then F6 to move or rename it — a bare name renames in place, a path moves it to the other side.")
 }
 
 func (m *Mux) transferHintDownload() {
-	m.transferHint("Download", "Use the Copy button (or F5) inside the SFTP browser, with focus on a remote listing entry.")
+	m.transferHint("Copy", "Highlight a file or folder in either listing, then F5 (or the Copy button) to copy it to the other side.")
 }
 
 func (m *Mux) transferHint(title, body string) {

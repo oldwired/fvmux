@@ -121,8 +121,8 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdNewSession, Category: "File", Name: "New Session", MenuLabel: "Ne~w~ Session"})
 	r.Register(&Command{ID: CmdOpenSession, Category: "File", Name: "Open Session…", MenuLabel: "~O~pen Session…", Chord: "C-g s"})
 	r.Register(&Command{ID: CmdSaveSessionAs, Category: "File", Name: "Save Session As…", MenuLabel: "Save Session ~A~s…"})
-	r.Register(&Command{ID: CmdRenameSession, Category: "File", Name: "Rename Session…", MenuLabel: "~R~ename Session…", Chord: "C-g $"})
-	r.Register(&Command{ID: CmdDeleteSession, Category: "File", Name: "Delete Session…", MenuLabel: "~D~elete Session…"})
+	r.Register(&Command{ID: CmdRenameSession, Category: "File", Name: "Rename Session…", MenuLabel: "Rena~m~e Session…", Chord: "C-g $"})
+	r.Register(&Command{ID: CmdDeleteSession, Category: "File", Name: "Delete Session…", MenuLabel: "De~l~ete Session…"})
 
 	// Pane rename.
 	r.Register(&Command{ID: CmdRenamePane, Category: "Pane", Name: "Rename Pane…", MenuLabel: "Rename ~P~ane…"})
@@ -167,8 +167,12 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdReloadHosts, Category: "Connections", Name: "Reload hosts.toml", MenuLabel: "~R~eload hosts.toml"})
 
 	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "File Browser (SFTP)…", MenuLabel: "~F~ile Browser (SFTP)…", Chord: "C-g F"})
-	r.Register(&Command{ID: CmdUploadFile, Category: "Transfer", Name: "Upload File (inside browser, F6)", MenuLabel: "~U~pload File (in browser, F6)"})
-	r.Register(&Command{ID: CmdDownloadFile, Category: "Transfer", Name: "Download File (inside browser, F5)", MenuLabel: "~D~ownload File (in browser, F5)"})
+	// F5/F6 are bidirectional inside the browser: F5 copies the highlighted
+	// entry to the other side, F6 moves/renames it. The names describe the
+	// keys, not an up/down direction. Hotkey markers stay unique within the
+	// Transfer category (F, o, M, A, C).
+	r.Register(&Command{ID: CmdDownloadFile, Category: "Transfer", Name: "Copy to Other Side (F5)", MenuLabel: "C~o~py to Other Side (F5)"})
+	r.Register(&Command{ID: CmdUploadFile, Category: "Transfer", Name: "Move / Rename (F6)", MenuLabel: "~M~ove / Rename (F6)"})
 	r.Register(&Command{ID: CmdActiveTransfers, Category: "Transfer", Name: "Active Transfers…", MenuLabel: "~A~ctive Transfers…"})
 	r.Register(&Command{ID: CmdClearCompleted, Category: "Transfer", Name: "Clear Completed Transfers", MenuLabel: "~C~lear Completed Transfers"})
 

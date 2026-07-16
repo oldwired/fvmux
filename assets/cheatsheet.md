@@ -9,6 +9,8 @@
 - New Session
 - `C-g s` — Open Session…
 - Save Session As…
+- `C-g $` — Rename Session…
+- Delete Session…
 - `C-g D` — Detach from tmux
 - `C-g :` — Run Command…
 - Edit config.toml
@@ -96,8 +98,8 @@
 ## Transfer
 
 - `C-g F` — File Browser (SFTP)…
-- Upload File (inside browser, F6)
-- Download File (inside browser, F5)
+- Copy to Other Side (F5)
+- Move / Rename (F6)
 - Active Transfers…
 - Clear Completed Transfers
 
@@ -110,6 +112,3 @@
 - `C-g L` — Log Viewer
 - About fvmux…
 
----
-
-*a multiplexer for the rest of us.*

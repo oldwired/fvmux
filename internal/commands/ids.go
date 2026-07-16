@@ -86,8 +86,8 @@ const (
 
 	// 1050s — transfer
 	CmdSFTPBrowser     uint16 = 1050 // Ctrl-G F
-	CmdUploadFile      uint16 = 1051 // Inside SFTP browser only (F6).
-	CmdDownloadFile    uint16 = 1052 // Inside SFTP browser only (F5).
+	CmdUploadFile      uint16 = 1051 // SFTP browser F6: move/rename.
+	CmdDownloadFile    uint16 = 1052 // SFTP browser F5: copy to other side.
 	CmdActiveTransfers uint16 = 1053
 	CmdClearCompleted  uint16 = 1054
 

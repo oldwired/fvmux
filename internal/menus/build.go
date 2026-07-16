@@ -53,6 +53,8 @@ func fileMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 		item(reg, commands.CmdOpenSession),
 		item(reg, commands.CmdSaveSession),
 		item(reg, commands.CmdSaveSessionAs),
+		item(reg, commands.CmdRenameSession),
+		item(reg, commands.CmdDeleteSession),
 		sep(),
 		item(reg, commands.CmdOpenConfig),
 		item(reg, commands.CmdOpenProfiles),

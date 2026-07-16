@@ -22,9 +22,23 @@ var Categories = []string{
 	"Connections", "Transfer", "Help",
 }
 
-// Generate produces a markdown document with every visible command's
-// chord and name, grouped by category in Categories order.
+// Generate produces the cheatsheet for the live Ctrl-G ? viewer, with a
+// whimsy tagline footer that rotates across days.
 func Generate(reg *commands.Registry) string {
+	return generate(reg, dailyTagline())
+}
+
+// GenerateBaked produces the byte-for-byte reproducible cheatsheet baked
+// into assets/cheatsheet.md by cmd/genmd. It omits the date-dependent
+// tagline so the committed asset stays stable and the drift test (which
+// diffs it against a fresh Generate) never flaps.
+func GenerateBaked(reg *commands.Registry) string {
+	return generate(reg, "")
+}
+
+// generate renders every visible command's chord and name grouped by
+// category in Categories order, appending tagline as a footer when non-empty.
+func generate(reg *commands.Registry, tagline string) string {
 	var b strings.Builder
 	b.WriteString("# fvmux Cheatsheet\n\n")
 
@@ -49,16 +63,22 @@ func Generate(reg *commands.Registry) string {
 	for _, cat := range sortedExtras {
 		writeCategory(&b, reg, cat)
 	}
-	if len(whimsy.Taglines) > 0 {
-		// Deterministic-per-day pick so the footer is stable within a
-		// session but rotates across days.
-		idx := int(time.Now().YearDay()) % len(whimsy.Taglines)
+	if tagline != "" {
 		b.WriteString("---\n\n")
 		b.WriteString("*")
-		b.WriteString(whimsy.Taglines[idx])
+		b.WriteString(tagline)
 		b.WriteString("*\n")
 	}
 	return b.String()
+}
+
+// dailyTagline picks a whimsy footer that is stable within a session but
+// rotates across days.
+func dailyTagline() string {
+	if len(whimsy.Taglines) == 0 {
+		return ""
+	}
+	return whimsy.Taglines[int(time.Now().YearDay())%len(whimsy.Taglines)]
 }
 
 func writeCategory(b *strings.Builder, reg *commands.Registry, category string) {

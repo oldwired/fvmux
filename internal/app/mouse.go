@@ -10,6 +10,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
 
+	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/debug"
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/prefix"
@@ -271,48 +272,81 @@ func (m *Mux) windowAtPoint(p geom.Point) *windowState {
 	return nil
 }
 
-// showPaneContextMenu opens a popupmenu at the click position with
-// the per-pane actions the right-click handler exposes. Indices are
-// resolved against the fixed item list below.
-func (m *Mux) showPaneContextMenu(origin geom.Point) {
-	items := []string{
-		"Split horizontal (C-g %)",
-		"Split vertical (C-g \")",
-		"Zoom / Unzoom (C-g z)",
-		"Rename window… (C-g ,)",
-		"---",
-		"Send Interrupt (Ctrl-C)",
-		"Send Quit (Ctrl-\\)",
-		"Send EOF (Ctrl-D)",
-		"Send SIGTERM",
-		"---",
-		"Respawn dead pane",
-		"Kill pane (C-g x)",
+// paneContextRows is the fixed right-click menu layout, as registry command
+// IDs in display order; 0 marks a "---" separator. Labels and chords are
+// pulled from the registry at open time (see paneContextMenuItems) so a
+// prefix rebind or keybindings.toml override shows the live chord. Dispatch
+// (showPaneContextMenu) keeps the pane-targeted m.doSplit / m.doZoom / …
+// methods, which act on the clicked pane rather than the focused one the
+// command actions would hit.
+var paneContextRows = []uint16{
+	commands.CmdSplitH,
+	commands.CmdSplitV,
+	commands.CmdZoomPane,
+	commands.CmdRenameWindow,
+	0,
+	commands.CmdSendSIGINT,
+	commands.CmdSendSIGQUIT,
+	commands.CmdSendEOF,
+	commands.CmdSendSIGTERM,
+	0,
+	commands.CmdRespawnPane,
+	commands.CmdClosePane,
+}
+
+// paneContextMenuItems renders paneContextRows into popupmenu labels. Each
+// registry-backed row shows its command Name with " (<chord>)" appended
+// when a chord is bound; separators pass through as "---".
+func paneContextMenuItems(reg *commands.Registry) []string {
+	items := make([]string, len(paneContextRows))
+	for i, id := range paneContextRows {
+		if id == 0 {
+			items[i] = "---"
+			continue
+		}
+		c := reg.ByID(id)
+		if c == nil {
+			continue
+		}
+		label := c.Name
+		if c.Chord != "" {
+			label += " (" + c.Chord + ")"
+		}
+		items[i] = label
 	}
+	return items
+}
+
+// showPaneContextMenu opens a popupmenu at the click position with the
+// per-pane actions the right-click handler exposes. The chosen index maps
+// back through paneContextRows to a command ID, so selecting a separator
+// (id 0) is a no-op.
+func (m *Mux) showPaneContextMenu(origin geom.Point) {
+	items := paneContextMenuItems(m.Reg)
 	idx := popupmenu.New(origin, items, 36).Run(&m.App.Desktop.Group)
-	if idx < 0 || idx >= len(items) {
+	if idx < 0 || idx >= len(paneContextRows) {
 		return
 	}
-	switch idx {
-	case 0:
+	switch paneContextRows[idx] {
+	case commands.CmdSplitH:
 		m.doSplit(false)
-	case 1:
+	case commands.CmdSplitV:
 		m.doSplit(true)
-	case 2:
+	case commands.CmdZoomPane:
 		m.doZoom()
-	case 3:
+	case commands.CmdRenameWindow:
 		m.renameWindow()
-	case 5:
+	case commands.CmdSendSIGINT:
 		m.sendSIGINT()
-	case 6:
+	case commands.CmdSendSIGQUIT:
 		m.sendSIGQUIT()
-	case 7:
+	case commands.CmdSendEOF:
 		m.sendEOF()
-	case 8:
+	case commands.CmdSendSIGTERM:
 		m.sendSIGTERM()
-	case 10:
+	case commands.CmdRespawnPane:
 		m.respawnPane()
-	case 11:
+	case commands.CmdClosePane:
 		m.doClose()
 	}
 }

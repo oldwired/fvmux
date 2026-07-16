@@ -10,10 +10,54 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
+	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/prefix"
 	"github.com/oldwired/fvmux/internal/session"
 )
+
+// TestPaneContextMenuLabelsTrackRegistry asserts the right-click menu sources
+// its chords from the registry rather than hardcoding them, so a prefix
+// rebind or keybindings.toml override is reflected in the labels.
+func TestPaneContextMenuLabelsTrackRegistry(t *testing.T) {
+	reg := commands.Defaults()
+
+	items := paneContextMenuItems(reg)
+	if !hasItem(items, "Split Horizontal (C-g %)") {
+		t.Fatalf("baseline menu missing default split chord: %v", items)
+	}
+	if !hasItem(items, "Kill Pane (C-g x)") {
+		t.Fatalf("baseline menu missing default kill chord: %v", items)
+	}
+	// Separator preserved and signal rows (no chord) render bare.
+	if !hasItem(items, "---") {
+		t.Errorf("menu dropped its separator: %v", items)
+	}
+	if !hasItem(items, "Send SIGTERM") {
+		t.Errorf("menu dropped the plain Send SIGTERM row: %v", items)
+	}
+
+	reg.RebindPrefix("C-g", "C-b")
+	items = paneContextMenuItems(reg)
+	if !hasItem(items, "Split Horizontal (C-b %)") {
+		t.Errorf("after rebind, split chord not updated: %v", items)
+	}
+	if !hasItem(items, "Kill Pane (C-b x)") {
+		t.Errorf("after rebind, kill chord not updated: %v", items)
+	}
+	if hasItem(items, "Split Horizontal (C-g %)") {
+		t.Errorf("after rebind, stale C-g chord still shown: %v", items)
+	}
+}
+
+func hasItem(items []string, want string) bool {
+	for _, it := range items {
+		if it == want {
+			return true
+		}
+	}
+	return false
+}
 
 // termPane is newTestPane with a real (PTY-less) Terminal attached, which
 // layout.Materialize needs in order to wrap each leaf.

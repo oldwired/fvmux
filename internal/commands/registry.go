@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -12,7 +13,6 @@ type Registry struct {
 	cmds       map[uint16]*Command
 	byCategory map[string][]*Command
 	byChord    map[string]*Command
-	providers  []func(*Ctx) []*Command
 }
 
 func New() *Registry {
@@ -117,27 +117,16 @@ func (r *Registry) ByCategory(cat string) []*Command { return r.byCategory[cat] 
 // LookupChord returns the command bound to chord, or nil if unbound.
 func (r *Registry) LookupChord(chord string) *Command { return r.byChord[chord] }
 
-// All returns every registered command. Iteration order is by ID for
-// stability (matters for the cheatsheet generator).
+// All returns every registered command sorted by ID. The by-ID order is a
+// contract the cheatsheet generator relies on for stable output. r.cmds is
+// keyed by ID, so no de-duplication is needed.
 func (r *Registry) All() []*Command {
 	out := make([]*Command, 0, len(r.cmds))
-	seen := map[uint16]bool{}
 	for _, c := range r.cmds {
-		if seen[c.ID] {
-			continue
-		}
-		seen[c.ID] = true
 		out = append(out, c)
 	}
-	sortByID(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
-}
-
-// RegisterProvider hooks in a dynamic-entry source (themes, profiles,
-// sessions, active connections, …). Providers are queried at palette
-// open and menu open; they do not pollute byID / byChord indexes.
-func (r *Registry) RegisterProvider(p func(*Ctx) []*Command) {
-	r.providers = append(r.providers, p)
 }
 
 // RebindPrefix rewrites every chord step matching oldToken to newToken
@@ -168,21 +157,4 @@ func rebindChord(chord, oldToken, newToken string) string {
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// Providers returns the merged set of dynamic entries for ctx.
-func (r *Registry) Providers(ctx *Ctx) []*Command {
-	var out []*Command
-	for _, p := range r.providers {
-		out = append(out, p(ctx)...)
-	}
-	return out
-}
-
-func sortByID(cmds []*Command) {
-	for i := 1; i < len(cmds); i++ {
-		for j := i; j > 0 && cmds[j-1].ID > cmds[j].ID; j-- {
-			cmds[j-1], cmds[j] = cmds[j], cmds[j-1]
-		}
-	}
 }

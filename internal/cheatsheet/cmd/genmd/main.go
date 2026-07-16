@@ -13,7 +13,7 @@ import (
 
 func main() {
 	out := filepath.Join("..", "..", "assets", "cheatsheet.md")
-	body := cheatsheet.Generate(commands.Defaults())
+	body := cheatsheet.GenerateBaked(commands.Defaults())
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "genmd:", err)
 		os.Exit(1)
