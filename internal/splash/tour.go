@@ -5,6 +5,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // RunTour walks the user through five centred tooltip dialogs, each
@@ -68,15 +70,8 @@ func RunTour(a *fvapp.Application) {
 
 func showStep(a *fvapp.Application, title, body string) bool {
 	desk := a.Desktop.BaseView()
-	w, h := 60, 14
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 60, 14, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title)
 	d.Insert(dialogs.NewStaticText(geom.NewRect(2, 2, w-2, h-4), body))
 	d.Insert(dialogs.NewButton(

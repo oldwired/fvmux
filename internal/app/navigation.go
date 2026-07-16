@@ -6,6 +6,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // focusWindowByNumber jumps to the window with the given Number badge.
@@ -84,15 +86,8 @@ func (m *Mux) showWindowList() {
 		keys = append(keys, key)
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 60, 14
-	if w > desk.Size.X-4 {
-		w = desk.Size.X - 4
-	}
-	if h > desk.Size.Y-4 {
-		h = desk.Size.Y - 4
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 60, 14, 4)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	idx := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), items).Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(keys) {
 		return

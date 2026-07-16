@@ -14,15 +14,8 @@ import (
 // empty or whitespace-only input means.
 func PromptString(a *fvapp.Application, title, label, initial string) (string, bool) {
 	desk := a.Desktop.BaseView()
-	w, h := 54, 8
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := CenterRect(desk.Size, 54, 8, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title)
 

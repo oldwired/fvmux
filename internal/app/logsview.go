@@ -11,6 +11,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/logviewer"
 
 	"github.com/oldwired/fvmux/internal/logs"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // showLogViewer opens a modal containing fv-go's logviewer widget
@@ -26,15 +27,8 @@ func (m *Mux) showLogViewer() {
 	}
 
 	desk := m.App.Desktop.BaseView()
-	w, h := 120, 30
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 120, 30, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h),
 		"Log Viewer (Esc to close)")
 

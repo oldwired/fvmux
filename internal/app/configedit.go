@@ -13,6 +13,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/editor"
 
 	"github.com/oldwired/fvmux/internal/atomicfile"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // openConfigFile opens path in a modal editor dialog. Missing files
@@ -59,16 +60,8 @@ func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
 	}
 
 	desk := m.App.Desktop.BaseView()
-	w := 90
-	h := 26
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 90, 26, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	// Minimum 50×12 — enough for the buttons not to overlap and the
 	// editor to still show ~6 rows × ~46 cols of content.
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), title+" — "+path)

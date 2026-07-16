@@ -14,6 +14,7 @@ import (
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // openSessionPicker fuzzy-picks a saved session and loads it. Saves
@@ -28,9 +29,10 @@ func (m *Mux) openSessionPicker() {
 		return
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 60, 14
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	// Previously this picker clamped nothing and could overflow a tiny
+	// terminal; give it the standard centre-and-clamp.
+	r := ui.CenterRect(desk.Size, 60, 14, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	idx := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), names).Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(names) {
 		return
@@ -208,9 +210,10 @@ func (m *Mux) deleteSession() {
 		return
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 60, 14
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	// Previously this picker clamped nothing and could overflow a tiny
+	// terminal; give it the standard centre-and-clamp.
+	r := ui.CenterRect(desk.Size, 60, 14, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	idx := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), names).Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(names) {
 		return

@@ -9,6 +9,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 
 	"github.com/oldwired/fvmux/internal/glue"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // askGlue offers to install the fvmuxa wrapper plus fvmux.tmux.conf
@@ -43,15 +44,8 @@ func askGlue(a *fvapp.Application, confDir string) bool {
 		"  Requires tmux on PATH."
 
 	desk := a.Desktop.BaseView()
-	w, h := 72, 18
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 72, 18, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "Install detach/reattach glue?")
 	d.Insert(dialogs.NewStaticText(geom.NewRect(2, 2, w-2, h-4), body))
 	// Mirror welcome's reserved-Cm-codes trick: only the four standard

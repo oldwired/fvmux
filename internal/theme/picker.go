@@ -8,6 +8,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/screen"
 	fvtheme "github.com/oldwired/fv-go/pkg/fv/theme"
 	"github.com/oldwired/fv-go/pkg/fv/views"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // PickLive opens a small modal picker that applies the focused theme
@@ -36,8 +38,10 @@ func PickLive(a *fvapp.Application, themes []*Theme, initial string) int {
 	if h > 14 {
 		h = 14
 	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	// Previously this picker clamped nothing and could overflow a tiny
+	// terminal; give it the standard centre-and-clamp.
+	r := ui.CenterRect(desk.Size, w, h, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 
 	p := &livePicker{
 		Base:    views.NewBase(geom.NewRect(x, y, x+w, y+h)),

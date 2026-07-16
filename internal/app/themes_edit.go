@@ -11,6 +11,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
 
 	"github.com/oldwired/fvmux/internal/atomicfile"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // editThemes is the View → Edit Themes… entry. Lists every TOML in the
@@ -58,15 +59,8 @@ func (m *Mux) editThemes() {
 		items[i] = r.label
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 60, 16
-	if w > desk.Size.X-4 {
-		w = desk.Size.X - 4
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 60, 16, 4)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	ff := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), items)
 	idx := ff.Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(rows) {

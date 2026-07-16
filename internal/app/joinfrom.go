@@ -10,6 +10,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
 
 	"github.com/oldwired/fvmux/internal/layout"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // joinFrom is the inverse of doBreakOut: take a single-leaf window's
@@ -49,9 +50,10 @@ func (m *Mux) joinFrom() {
 		items[i] = fmt.Sprintf("%d: %s", c.ws.Number, c.ws.displayTitle())
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 50, 12
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	// Previously this picker clamped nothing and could overflow a tiny
+	// terminal; give it the standard centre-and-clamp.
+	r := ui.CenterRect(desk.Size, 50, 12, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	idx := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), items).Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(cands) {
 		return

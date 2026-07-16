@@ -6,6 +6,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // aboutBody is the text of the About dialog, with %s for the fvmux
@@ -41,15 +43,8 @@ const aboutBody = "" +
 // Wired to commands.CmdAbout — appears as Help → About fvmux…
 func (m *Mux) showAbout() {
 	desk := m.App.Desktop.BaseView()
-	w, h := 66, 22
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 66, 22, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 
 	body := fmt.Sprintf(aboutBody, m.Opts.Version)
 

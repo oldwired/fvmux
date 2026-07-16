@@ -14,6 +14,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
 
 	"github.com/oldwired/fvmux/internal/prefix"
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // Result describes whatever the wizard wants the caller to apply.
@@ -77,15 +78,8 @@ func Run(a *fvapp.Application, currentPrefixKey, currentShell, confDir string, p
 
 func showSplash(a *fvapp.Application) {
 	desk := a.Desktop.BaseView()
-	w, h := 54, 12
-	if w > desk.Size.X-4 {
-		w = desk.Size.X - 4
-	}
-	if h > desk.Size.Y-4 {
-		h = desk.Size.Y - 4
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 54, 12, 4)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "fvmux")
 	d.Insert(dialogs.NewStaticText(
 		geom.NewRect(2, 2, w-2, h-3),
@@ -123,15 +117,8 @@ const (
 // values.
 func showWelcome(a *fvapp.Application) welcomeChoice {
 	desk := a.Desktop.BaseView()
-	w, h := 64, 13
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 64, 13, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "Welcome to fvmux")
 	d.Insert(dialogs.NewStaticText(
 		geom.NewRect(2, 2, w-2, h-4),
@@ -179,10 +166,7 @@ func pickPrefix(a *fvapp.Application, currentPrefixKey string) string {
 		items[i] = mark + s.Label
 	}
 	desk := a.Desktop.BaseView()
-	origin := geom.Point{
-		X: (desk.Size.X - 30) / 2,
-		Y: (desk.Size.Y - 8) / 2,
-	}
+	origin := ui.CenterRect(desk.Size, 30, 8, 0).A
 	idx := popupmenu.New(origin, items, 40).Run(&a.Desktop.Group)
 	if idx < 0 || idx >= len(prefix.Available) {
 		return ""

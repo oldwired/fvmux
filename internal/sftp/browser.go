@@ -16,6 +16,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/widgets/taskprogress"
 
 	pkgsftp "github.com/pkg/sftp"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 const (
@@ -132,15 +134,8 @@ func Show(a *fvapp.Application, alias, controlPath string, hostOpts []string, pa
 	localCwd := defaultLocalRoot()
 
 	desk := a.Desktop.BaseView()
-	w, h := 110, 32
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 110, 32, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	// Min 80×18 — tight but everything still draws: ~16-col tree,
 	// ~22-col listing, ~20-col preview, plus the transfer strip and
 	// button row.

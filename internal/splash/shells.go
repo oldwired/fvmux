@@ -12,6 +12,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/popupmenu"
+
+	"github.com/oldwired/fvmux/internal/ui"
 )
 
 // pickShell asks the user to choose a default shell. Behaviour:
@@ -45,10 +47,7 @@ func pickShell(a *fvapp.Application, currentShell string) string {
 	items = append(items, labelKeep, labelCustom)
 
 	desk := a.Desktop.BaseView()
-	origin := geom.Point{
-		X: (desk.Size.X - 40) / 2,
-		Y: (desk.Size.Y - 8) / 2,
-	}
+	origin := ui.CenterRect(desk.Size, 40, 8, 0).A
 	idx := popupmenu.New(origin, items, 50).Run(&a.Desktop.Group)
 	switch {
 	case idx < 0:
@@ -135,15 +134,8 @@ func filterExisting(paths []string) []string {
 // on OK, ("", false) on Cancel/Esc.
 func promptShellPath(a *fvapp.Application, initial string) (string, bool) {
 	desk := a.Desktop.BaseView()
-	w, h := 60, 8
-	if w > desk.Size.X-2 {
-		w = desk.Size.X - 2
-	}
-	if h > desk.Size.Y-2 {
-		h = desk.Size.Y - 2
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 60, 8, 2)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	d := dialogs.NewDialog(geom.NewRect(x, y, x+w, y+h), "Custom shell path")
 
 	il := dialogs.NewInputLine(geom.NewRect(2, 4, w-3, 5), 1024)

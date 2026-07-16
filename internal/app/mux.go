@@ -30,6 +30,7 @@ import (
 	"github.com/oldwired/fvmux/internal/sshmgr"
 	"github.com/oldwired/fvmux/internal/statusbar"
 	muxtheme "github.com/oldwired/fvmux/internal/theme"
+	"github.com/oldwired/fvmux/internal/ui"
 	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
@@ -1314,15 +1315,8 @@ func (m *Mux) showProfilePicker() {
 		items[i] = profilePickerRow(p)
 	}
 	desk := m.App.Desktop.BaseView()
-	w, h := 70, 14
-	if w > desk.Size.X-4 {
-		w = desk.Size.X - 4
-	}
-	if h > desk.Size.Y-4 {
-		h = desk.Size.Y - 4
-	}
-	x := (desk.Size.X - w) / 2
-	y := (desk.Size.Y - h) / 2
+	r := ui.CenterRect(desk.Size, 70, 14, 4)
+	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 	ff := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), items)
 	idx := ff.Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(m.Opts.Profiles) {
