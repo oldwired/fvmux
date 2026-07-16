@@ -46,9 +46,10 @@ func TestLoad_MalformedThenBackupThenDefaults(t *testing.T) {
 	if _, err := BackupCorrupt(path); err != nil {
 		t.Fatalf("BackupCorrupt: %v", err)
 	}
-	// A subsequent Save (defaults) must succeed and produce a parseable file.
-	if err := Save(path, Defaults()); err != nil {
-		t.Fatalf("Save after backup: %v", err)
+	// A subsequent programmatic persist must succeed and produce a
+	// parseable file now the corrupt original is out of the way.
+	if err := UpdateKeys(path, KV{Section: "general", Key: "prefix_key", Value: "C-g"}); err != nil {
+		t.Fatalf("UpdateKeys after backup: %v", err)
 	}
 	c, err := Load(path)
 	if err != nil {

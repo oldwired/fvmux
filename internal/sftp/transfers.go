@@ -455,17 +455,31 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 	return nil
 }
 
+// renameClient is the slice of *sftp.Client remoteReplace needs,
+// narrowed so tests can script rename failures.
+type renameClient interface {
+	PosixRename(oldname, newname string) error
+	Rename(oldname, newname string) error
+	Remove(path string) error
+}
+
 // remoteReplace atomically replaces dest with tmp on the remote side.
-// Prefers the posix-rename extension (overwrites in one step); falls back
-// to remove-then-rename for servers that lack it.
-func remoteReplace(c *pkgsftp.Client, tmp, dest string) error {
+// Prefers the posix-rename extension (overwrites in one step). Servers
+// without it get rename-first: a plain rename succeeds when dest doesn't
+// exist, and only if it fails is dest removed and the rename retried.
+// If that final rename also fails the temp file is deliberately kept —
+// the copy completed, and removing it too would destroy both the
+// original and the fresh data.
+func remoteReplace(c renameClient, tmp, dest string) error {
 	if err := c.PosixRename(tmp, dest); err == nil {
+		return nil
+	}
+	if err := c.Rename(tmp, dest); err == nil {
 		return nil
 	}
 	_ = c.Remove(dest)
 	if err := c.Rename(tmp, dest); err != nil {
-		_ = c.Remove(tmp)
-		return err
+		return fmt.Errorf("replacing %s failed: %w (the transferred data is preserved at %s)", dest, err, tmp)
 	}
 	return nil
 }

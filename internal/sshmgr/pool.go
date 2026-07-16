@@ -16,7 +16,6 @@ package sshmgr
 import (
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
@@ -148,24 +147,20 @@ func SweepStale(dir string) {
 	}
 }
 
-// Shutdown asks every live master to exit cleanly via `ssh -O exit`.
-// Cheap and non-interactive. Skipped for aliases whose socket has
-// already gone away (ControlPersist may have already cleaned up).
-// Called from cmd/fvmux's deferred shutdown.
+// Shutdown drops the pool's bookkeeping and removes only *dead* socket
+// files (the same rule SweepStale applies). Live masters are
+// deliberately left running: the socket path is a deterministic
+// per-user hash, so masters are shared with other fvmux instances, and
+// an `ssh -O exit` here would cut another instance's SSH panes and
+// in-flight transfers. A master nobody is using reaps itself via
+// ControlPersist=600. Called from cmd/fvmux's deferred shutdown.
 func (p *Pool) Shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, e := range p.entries {
-		if _, err := os.Stat(e.sockPath); err != nil {
-			continue
+		if !sockAlive(e.sockPath) {
+			_ = os.Remove(e.sockPath)
 		}
-		cmd := exec.Command("ssh",
-			"-O", "exit",
-			"-o", "ControlPath="+e.sockPath,
-			e.alias,
-		)
-		_ = cmd.Run()
-		_ = os.Remove(e.sockPath)
 	}
 	// Reset to an empty (non-nil) map rather than nil: an in-flight poll
 	// goroutine racing shutdown may still Acquire, and assigning into a

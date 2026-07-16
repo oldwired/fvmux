@@ -6,6 +6,45 @@ import (
 	"testing"
 )
 
+func TestValidSessionName(t *testing.T) {
+	valid := []string{"work", "client-a", "a b", "work.1", "prod_2"}
+	for _, name := range valid {
+		if err := ValidSessionName(name); err != nil {
+			t.Errorf("ValidSessionName(%q) = %v; want nil", name, err)
+		}
+	}
+	invalid := []string{"", "  ", "../config", "..", ".", "a/b", `a\b`, "sessions/../../x"}
+	for _, name := range invalid {
+		if err := ValidSessionName(name); err == nil {
+			t.Errorf("ValidSessionName(%q) = nil; want error", name)
+		}
+	}
+}
+
+func TestSessionFile_HostileNameStaysInsideSessionsDir(t *testing.T) {
+	p := Paths{Root: "/cfg", StateRoot: "/state"}
+	sessionsDir := filepath.Join(p.Root, "sessions")
+
+	// Every name that ValidSessionName rejects must still resolve to a
+	// path strictly inside the sessions dir (it gets hashed), never an
+	// escape like /cfg/config.toml.
+	for _, name := range []string{"../config", "..", ".", "a/b", `a\b`, "sessions/../../x", ""} {
+		got := p.SessionFile(name)
+		if dir := filepath.Dir(got); dir != sessionsDir {
+			t.Errorf("SessionFile(%q) = %q escaped sessions dir (dir %q, want %q)",
+				name, got, dir, sessionsDir)
+		}
+		if !strings.HasSuffix(got, ".toml") {
+			t.Errorf("SessionFile(%q) = %q; want a .toml file", name, got)
+		}
+	}
+
+	// A valid name maps to the obvious plain path (no hashing).
+	if got := p.SessionFile("work"); got != filepath.Join(sessionsDir, "work.toml") {
+		t.Errorf("SessionFile(\"work\") = %q; want plain path", got)
+	}
+}
+
 func TestControlSocket_HashedNameIsSafeAndBounded(t *testing.T) {
 	p := Paths{Root: "/cfg", StateRoot: "/state"}
 

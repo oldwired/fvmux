@@ -15,8 +15,11 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Paths resolves every fvmux file location. Override Root to relocate
@@ -74,7 +77,31 @@ func (p Paths) KeybindingsFile() string { return filepath.Join(p.Root, "keybindi
 func (p Paths) HostsFile() string       { return filepath.Join(p.Root, "hosts.toml") }
 func (p Paths) StateFile() string       { return filepath.Join(p.StateRoot, "state.toml") }
 func (p Paths) SessionFile(name string) string {
+	// Defense in depth: a name that fails ValidSessionName (path
+	// separators, "..") is hashed — mirroring ControlSocket — so a
+	// hostile name can never make an autosave escape the sessions dir,
+	// even if a new caller forgets to validate at the entry point.
+	if ValidSessionName(name) != nil {
+		sum := sha256.Sum256([]byte(name))
+		name = hex.EncodeToString(sum[:8])
+	}
 	return filepath.Join(p.Root, "sessions", name+".toml")
+}
+
+// ValidSessionName rejects session names that can't safely be embedded
+// in a file path: empty names, path separators, "." / "..", and names
+// differing from their own filepath.Base. Every surface that accepts a
+// session name (-session flag, Save Session As) must call this before
+// the name reaches SessionFile.
+func ValidSessionName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("session name is empty")
+	}
+	if strings.ContainsAny(name, `/\`) || name == "." || name == ".." ||
+		filepath.Base(name) != name {
+		return fmt.Errorf("session name %q must be a plain file name (no path separators or ..)", name)
+	}
+	return nil
 }
 
 // ControlSocketDir is the directory holding SSH ControlMaster sockets.

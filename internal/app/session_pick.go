@@ -11,6 +11,7 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/fuzzyfinder"
 
+	"github.com/oldwired/fvmux/internal/config"
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
@@ -78,6 +79,10 @@ func (m *Mux) newSession() {
 	if !m.canCloseAllWindows() {
 		return
 	}
+	// Persist the outgoing named session first — every other close-all
+	// path (quit, signal, panic, picker switch) saves; without this the
+	// layout work since the last manual save is silently discarded.
+	_ = m.SaveSessionSilent()
 	// SFTP browsers are desktop dialogs, not windows in m.windowOrder
 	// — close them via the sftp package's own registry before the
 	// window loop runs. Also cancel any pending session-restore SFTP
@@ -134,6 +139,11 @@ func (m *Mux) saveSessionAs() {
 		return
 	}
 	name = strings.TrimSpace(name)
+	if err := config.ValidSessionName(name); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Invalid session name:\n%s", []any{err.Error()}, msgbox.OKOnly)
+		return
+	}
 	m.Opts.SessionName = name
 	if err := m.SaveSessionSilent(); err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,

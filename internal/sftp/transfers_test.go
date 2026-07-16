@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,130 @@ func (stallWriter) Write(p []byte) (int, error) { return 0, nil }
 type errReader struct{ err error }
 
 func (e errReader) Read(p []byte) (int, error) { return 0, e.err }
+
+// fakeRenameClient scripts the three-method renameClient surface so
+// remoteReplace's fallback ladder (PosixRename → Rename → Remove(dest) →
+// Rename) can be driven through each branch. Every call the code makes is
+// recorded so tests can assert exactly what ran — in particular that a
+// failed replace never deletes the freshly-transferred tmp file.
+type fakeRenameClient struct {
+	posixRename func(old, new string) error
+	rename      func(old, new string) error
+	remove      func(path string) error
+
+	renameCalls int
+	removeCalls []string
+}
+
+func (f *fakeRenameClient) PosixRename(old, new string) error {
+	if f.posixRename != nil {
+		return f.posixRename(old, new)
+	}
+	return nil
+}
+
+func (f *fakeRenameClient) Rename(old, new string) error {
+	f.renameCalls++
+	if f.rename != nil {
+		return f.rename(old, new)
+	}
+	return nil
+}
+
+func (f *fakeRenameClient) Remove(path string) error {
+	f.removeCalls = append(f.removeCalls, path)
+	if f.remove != nil {
+		return f.remove(path)
+	}
+	return nil
+}
+
+const (
+	testTmp  = "/data/file.txt.part-fvmux"
+	testDest = "/data/file.txt"
+)
+
+// (a) PosixRename succeeds → the single-step path; no Rename/Remove.
+func TestRemoteReplace_PosixRenameSucceeds(t *testing.T) {
+	f := &fakeRenameClient{posixRename: func(_, _ string) error { return nil }}
+	if err := remoteReplace(f, testTmp, testDest); err != nil {
+		t.Fatalf("remoteReplace = %v; want nil", err)
+	}
+	if f.renameCalls != 0 {
+		t.Errorf("Rename called %d times; want 0", f.renameCalls)
+	}
+	if len(f.removeCalls) != 0 {
+		t.Errorf("Remove called %v; want none", f.removeCalls)
+	}
+}
+
+// (b) PosixRename fails but the first plain Rename succeeds (dest didn't
+// exist) → dest is never Removed.
+func TestRemoteReplace_FirstRenameSucceeds(t *testing.T) {
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+		rename:      func(_, _ string) error { return nil },
+	}
+	if err := remoteReplace(f, testTmp, testDest); err != nil {
+		t.Fatalf("remoteReplace = %v; want nil", err)
+	}
+	if f.renameCalls != 1 {
+		t.Errorf("Rename called %d times; want 1", f.renameCalls)
+	}
+	if len(f.removeCalls) != 0 {
+		t.Errorf("dest must not be Removed when the first rename works; got %v", f.removeCalls)
+	}
+}
+
+// (c) PosixRename fails, first Rename fails, Remove(dest) runs, second
+// Rename succeeds → ok; exactly one Remove and its argument is dest, not
+// tmp.
+func TestRemoteReplace_RemoveDestThenRenameSucceeds(t *testing.T) {
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+	}
+	f.rename = func(_, _ string) error {
+		if f.renameCalls == 1 { // first invocation fails (dest exists)
+			return errors.New("dest exists")
+		}
+		return nil // retry after Remove(dest) succeeds
+	}
+	if err := remoteReplace(f, testTmp, testDest); err != nil {
+		t.Fatalf("remoteReplace = %v; want nil", err)
+	}
+	if f.renameCalls != 2 {
+		t.Errorf("Rename called %d times; want 2", f.renameCalls)
+	}
+	if len(f.removeCalls) != 1 {
+		t.Fatalf("Remove called %d times; want exactly 1 (%v)", len(f.removeCalls), f.removeCalls)
+	}
+	if f.removeCalls[0] != testDest {
+		t.Errorf("Remove(%q); want Remove(%q) — must remove dest, never tmp", f.removeCalls[0], testDest)
+	}
+}
+
+// (d) PosixRename fails and both Renames fail → error mentions the tmp
+// path, and Remove was called exactly once with dest. The regression:
+// the tmp file (the only surviving copy of the data) must NOT be removed.
+func TestRemoteReplace_BothRenamesFailPreservesTmp(t *testing.T) {
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+		rename:      func(_, _ string) error { return errors.New("rename failed") },
+	}
+	err := remoteReplace(f, testTmp, testDest)
+	if err == nil {
+		t.Fatal("remoteReplace = nil; want error when both renames fail")
+	}
+	if !strings.Contains(err.Error(), testTmp) {
+		t.Errorf("error %q does not mention preserved tmp path %q", err.Error(), testTmp)
+	}
+	if f.renameCalls != 2 {
+		t.Errorf("Rename called %d times; want 2", f.renameCalls)
+	}
+	if len(f.removeCalls) != 1 || f.removeCalls[0] != testDest {
+		t.Errorf("Remove calls = %v; want exactly one Remove(%q) and tmp left intact", f.removeCalls, testDest)
+	}
+}
 
 func TestSyncWidget_ClampsHugeSizesWithoutOverflow(t *testing.T) {
 	m := NewManager("a")
