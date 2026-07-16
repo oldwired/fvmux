@@ -105,14 +105,13 @@ func (m *Mux) refreshWindowTitle(ws *windowState) {
 // field has a sensible zero value, so callers can populate only what
 // they need.
 type Options struct {
-	Paths           config.Paths
-	Config          *config.Config
-	Profiles        []*profile.Profile
-	Themes          []*muxtheme.Theme
-	StatusBar       *statusbar.Bar
-	SessionName     string // empty ⇒ ephemeral session, no autosave
-	StartingProfile string // empty ⇒ honour config.General.DefaultProfile
-	Version         string // build version, recorded in state.toml
+	Paths       config.Paths
+	Config      *config.Config
+	Profiles    []*profile.Profile
+	Themes      []*muxtheme.Theme
+	StatusBar   *statusbar.Bar
+	SessionName string // empty ⇒ ephemeral session, no autosave
+	Version     string // build version, recorded in state.toml
 
 	// RefreshUI is invoked after any Mux action that changes the
 	// surface bindings (e.g., ApplyPrefix rewrites every chord — the
@@ -471,6 +470,17 @@ func (m *Mux) connectHost() {
 	// runs inside this PTY pane — the password prompt (if any) lands
 	// in the pane rather than corrupting fvmux's display.
 	prof := m.sshProfile(h, h.Alias)
+	// connect_split decides how the connection lands: split the focused
+	// pane ("vertical" side-by-side / "horizontal" stacked), or open a
+	// floating window ("window", also the fallback when there's no
+	// focused pane to divide).
+	switch m.Opts.Config.General.ConnectSplit {
+	case "vertical", "horizontal":
+		if ws := m.currentWindow(); ws != nil && ws.Focus != nil && ws.Focus.IsLeaf() {
+			m.doSplitWith(prof, m.Opts.Config.General.ConnectSplit == "vertical")
+			return
+		}
+	}
 	_, err := m.openWindowFromProfile(prof)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
@@ -478,31 +488,96 @@ func (m *Mux) connectHost() {
 	}
 }
 
-// openWindowFromProfile shares the bulk of NewWindow but accepts an
-// arbitrary Profile (used for ad-hoc spawns like ssh hosts).
+// openWindowFromProfile is THE window-spawn path: NewWindow, the
+// profile picker, and every ad-hoc spawn (ssh hosts) funnel through
+// it, and it funnels the assembly tail through finishWindow — the
+// ritual used to exist in three hand-copied variants that had already
+// drifted (doBreakOut forgot fridayShipIt/refreshStatusBar).
 func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error) {
+	title := prof.Title
+	if title == "" {
+		title = prof.Name
+	}
 	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
 	num := m.nextWindowNumber()
-	w := views.NewWindow(bounds, prof.Title, num)
+	w := views.NewWindow(bounds, title, num)
 	interior := windowInterior(w)
+	root, err := m.buildWindowRoot(prof, interior, w)
+	if err != nil {
+		return nil, err
+	}
+	m.finishWindow(w, num, title, root, interior)
+	return w, nil
+}
+
+// buildWindowRoot materializes prof into a pane tree: a single leaf
+// normally, or the profile's optional pre-split `layout` DSL (the same
+// grammar session snapshots use; each leaf's profile name resolves
+// against profiles.toml, falling back to the default shell). A layout
+// that fails to parse degrades to a single pane with a warning rather
+// than blocking the window.
+func (m *Mux) buildWindowRoot(prof *profile.Profile, interior geom.Rect, w *views.Window) (*layout.PaneNode, error) {
+	if prof.Layout != "" {
+		var spawned []*session.Pane
+		spawn := func(spec layout.LeafSpec) (*session.Pane, error) {
+			leafProf := profile.Find(m.Opts.Profiles, spec.Profile)
+			if leafProf == nil {
+				leafProf = profile.Defaults()[0]
+			}
+			pane, err := m.instantiateProfile(leafProf, interior)
+			if err != nil {
+				return nil, err
+			}
+			spawned = append(spawned, pane)
+			if spec.Title != "" {
+				pane.Title = spec.Title
+			}
+			m.wireTerminalCallbacks(pane, w)
+			return pane, nil
+		}
+		root, err := layout.Unmarshal(prof.Layout, spawn)
+		if err == nil && root != nil {
+			return root, nil
+		}
+		// Bad DSL: reap whatever spawned before the parse failed, warn,
+		// and open the plain single pane the user can still work in.
+		for _, p := range spawned {
+			m.stopPane(p)
+		}
+		slog.Warn("profile layout invalid; opening a single pane",
+			"profile", prof.Name, "err", err)
+		views.CallSoon(func() {
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
+				"Profile %q has an invalid layout (%v) — opened a single pane instead.",
+				[]any{prof.Name, err}, msgbox.OKOnly)
+		})
+	}
 	pane, err := m.instantiateProfile(prof, interior)
 	if err != nil {
 		return nil, err
 	}
 	m.wireTerminalCallbacks(pane, w)
-	root := layout.Leaf(pane)
+	return layout.Leaf(pane), nil
+}
+
+// finishWindow is the shared window-assembly tail: state bookkeeping,
+// materialize, register, and the post-open refreshes. Callers create
+// the frame first (panes' terminal callbacks need it) and hand
+// everything here so no copy of the ritual can forget a step.
+func (m *Mux) finishWindow(w *views.Window, num int, title string, root *layout.PaneNode, interior geom.Rect) *windowState {
 	state := &windowState{
 		ID:     session.NewWindowID(),
 		Number: num,
-		Title:  prof.Title,
+		Title:  title,
 		Frame:  w,
 		Root:   root,
-		Focus:  root,
+		Focus:  root.CollectLeaves()[0],
 	}
-	body := layout.Materialize(root, interior, nil)
-	w.Insert(body)
+	w.Insert(layout.Materialize(root, interior, nil))
 	m.registerWindow(w, state)
-	return w, nil
+	m.fridayShipIt()
+	m.refreshStatusBar()
+	return state
 }
 
 func (m *Mux) showThemePicker() {
@@ -563,12 +638,7 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 		})
 	}
 
-	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
-	num := m.nextWindowNumber()
-	w := views.NewWindow(bounds, prof.Name, num)
-	interior := windowInterior(w)
-
-	pane, err := m.instantiateProfile(prof, interior)
+	w, err := m.openWindowFromProfile(prof)
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 			"Couldn't start %s:\n%s",
@@ -576,24 +646,6 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 			msgbox.OKOnly)
 		return nil, err
 	}
-	m.wireTerminalCallbacks(pane, w)
-
-	root := layout.Leaf(pane)
-	ws := &windowState{
-		ID:     session.NewWindowID(),
-		Number: num,
-		Title:  prof.Name,
-		Frame:  w,
-		Root:   root,
-		Focus:  root,
-	}
-
-	body := layout.Materialize(root, interior, nil)
-	w.Insert(body)
-
-	m.registerWindow(w, ws)
-	m.fridayShipIt()
-	m.refreshStatusBar()
 	return w, nil
 }
 
@@ -872,13 +924,20 @@ func (m *Mux) windowNumberInUse(n int) bool {
 }
 
 func (m *Mux) doSplit(vertical bool) {
-	ws := m.currentWindow()
-	if ws == nil || ws.Focus == nil || !ws.Focus.IsLeaf() {
-		return
-	}
 	prof := profile.Find(m.Opts.Profiles, m.Opts.Config.General.DefaultProfile)
 	if prof == nil {
 		prof = profile.Defaults()[0]
+	}
+	m.doSplitWith(prof, vertical)
+}
+
+// doSplitWith divides the focused pane, spawning the new sibling from
+// prof. Shared by the plain split chords (default profile) and by
+// connect_split, which splits with an ad-hoc ssh profile.
+func (m *Mux) doSplitWith(prof *profile.Profile, vertical bool) {
+	ws := m.currentWindow()
+	if ws == nil || ws.Focus == nil || !ws.Focus.IsLeaf() {
+		return
 	}
 	newPane, err := m.instantiateProfile(prof, geom.NewRect(0, 0, 40, 12))
 	if err != nil {
@@ -995,23 +1054,15 @@ func (m *Mux) doBreakOut() {
 	}
 	m.rerender(ws)
 
-	// Open a new window with the detached pane as its only leaf.
+	// Open a new window with the detached pane as its only leaf, via
+	// the shared assembly tail (this copy of the ritual used to forget
+	// fridayShipIt/refreshStatusBar).
 	bounds := m.cascadedBounds()
 	num := m.nextWindowNumber()
 	w := views.NewWindow(bounds, newWinRoot.Pane.Title, num)
 	interior := windowInterior(w)
 	m.wireTerminalCallbacks(newWinRoot.Pane, w)
-	newWs := &windowState{
-		ID:     session.NewWindowID(),
-		Number: num,
-		Title:  newWinRoot.Pane.Title,
-		Frame:  w,
-		Root:   newWinRoot,
-		Focus:  newWinRoot,
-	}
-	body := layout.Materialize(newWinRoot, interior, nil)
-	w.Insert(body)
-	m.registerWindow(w, newWs)
+	m.finishWindow(w, num, newWinRoot.Pane.Title, newWinRoot, interior)
 }
 
 func (m *Mux) cycleWindow(direction int) {

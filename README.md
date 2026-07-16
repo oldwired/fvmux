@@ -334,9 +334,11 @@ prefix_key         = "C-g"      # set by the first-run wizard.
 default_profile    = "shell"
 confirm_kill       = true       # ask before killing live panes / quitting.
 splash_enabled     = true
-connect_split      = "vertical" # how SSH connect splits the focused pane.
-new_window_command = ""         # non-empty ⇒ Ctrl-G c runs this via `sh -c`
-                                # (e.g. "ssh prod-1"); empty ⇒ default_profile.
+connect_split      = "vertical" # Ctrl-G H: "vertical"/"horizontal" split the
+                                # focused pane; "window" opens a floating window.
+new_window_command = ""         # non-empty ⇒ Ctrl-G c runs this via the system
+                                # shell (sh -c; cmd /c on Windows); empty ⇒
+                                # default_profile.
 
 [terminal]
 scrollback_lines = 10000

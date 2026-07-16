@@ -40,17 +40,6 @@ var (
 	liveMgrs []*Manager
 )
 
-// LiveManager returns the most recently opened manager, or nil if no
-// browser is open. Kept for callers that want a single handle.
-func LiveManager() *Manager {
-	liveMu.Lock()
-	defer liveMu.Unlock()
-	if n := len(liveMgrs); n > 0 {
-		return liveMgrs[n-1]
-	}
-	return nil
-}
-
 // LiveManagers returns a snapshot of every active browser's manager.
 // Safe to iterate without holding the mutex.
 func LiveManagers() []*Manager {

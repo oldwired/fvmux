@@ -102,8 +102,10 @@ confirm_kill    = true
 # Help → Reset First-Run Wizard.
 splash_enabled  = true
 
-# connect_split: how <prefix> H (Connect to Host) divides the focused
-# pane. "vertical" splits side-by-side; "horizontal" stacks.
+# connect_split: where <prefix> H (Connect to Host) puts the session.
+# "vertical" splits the focused pane side-by-side, "horizontal" stacks
+# it, "window" opens a floating window ("window" is also the fallback
+# when no pane is focused).
 connect_split   = "vertical"
 
 # new_window_command: when non-empty, <prefix> c runs this command

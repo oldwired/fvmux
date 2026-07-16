@@ -152,14 +152,13 @@ func run() error {
 	)
 
 	mux = muxapp.NewMux(a, reg, muxapp.Options{
-		Paths:           paths,
-		Config:          cfg,
-		Profiles:        profiles,
-		StatusBar:       bar,
-		SessionName:     f.Session,
-		StartingProfile: f.Profile,
-		Version:         Version,
-		RefreshUI:       rebuildMenu,
+		Paths:       paths,
+		Config:      cfg,
+		Profiles:    profiles,
+		StatusBar:   bar,
+		SessionName: f.Session,
+		Version:     Version,
+		RefreshUI:   rebuildMenu,
 	})
 
 	rebuildMenu()

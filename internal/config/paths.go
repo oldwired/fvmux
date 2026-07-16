@@ -48,11 +48,16 @@ func Default() Paths {
 }
 
 // WithRoot overrides the config root (used by -config and by tests).
+// The state root moves under it too: -config exists to isolate an
+// instance, and keeping state.toml (first-run flag, palette MRU) and
+// the ControlMaster socket dir at the global XDG location would leave
+// that isolation half-done — MRU writes interleaving between
+// instances, masters shared with the main one.
 func (p Paths) WithRoot(root string) Paths {
 	if root == "" {
 		return p
 	}
-	return Paths{Root: root, StateRoot: p.StateRoot}
+	return Paths{Root: root, StateRoot: filepath.Join(root, "state")}
 }
 
 // EnsureDirs creates every directory fvmux writes into.
