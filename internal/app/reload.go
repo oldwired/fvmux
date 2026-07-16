@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 
 	"github.com/oldwired/fvmux/internal/config"
@@ -83,6 +84,19 @@ func (m *Mux) ReloadConfig() {
 	}
 
 	m.reloadThemesInternal()
+
+	// Re-apply window_shadow to already-open windows; new windows pick
+	// it up in registerWindow.
+	for _, ws := range m.windows {
+		if ws == nil || ws.Frame == nil {
+			continue
+		}
+		if m.Opts.Config.Appearance.WindowShadow {
+			ws.Frame.State |= consts.SfShadow
+		} else {
+			ws.Frame.State &^= consts.SfShadow
+		}
+	}
 
 	if m.Opts.RefreshUI != nil {
 		m.Opts.RefreshUI()

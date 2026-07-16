@@ -38,13 +38,11 @@ func (m *Mux) showActiveConnections() {
 	msgbox.Show(&m.App.Desktop.Group, msgbox.Info, sb.String(), msgbox.OKOnly)
 }
 
-// reloadHosts re-reads hosts.toml. The picker reads it on each open,
-// so this is mostly a clarity / UX entry; the side effect is the
-// status-bar info popup confirming the file parsed.
+// reloadHosts backs the "Validate hosts.toml" command. Nothing caches
+// host data — every picker re-reads the file — so the command's whole
+// job is a parse check that surfaces errors at a user-visible moment
+// rather than on the next Ctrl-G H.
 func (m *Mux) reloadHosts() {
-	// Picker re-reads from disk on each invocation, so all we need to
-	// do is validate the file. Doing this here surfaces parse errors
-	// at a user-visible moment rather than the next Ctrl-G H.
 	hosts, err := sshmgr.Load(m.Opts.Paths.HostsFile())
 	if err != nil {
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
@@ -52,7 +50,7 @@ func (m *Mux) reloadHosts() {
 		return
 	}
 	msgbox.Showf(&m.App.Desktop.Group, msgbox.Info,
-		"hosts.toml reloaded — %d host%s known.",
+		"hosts.toml OK — %d host%s known.",
 		[]any{len(hosts), pluralS(len(hosts))}, msgbox.OKOnly)
 }
 

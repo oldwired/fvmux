@@ -128,7 +128,7 @@ func TestInstantiateProfileReleasesOnFailure(t *testing.T) {
 func TestResolveProfileFallback_SetsSSHAlias(t *testing.T) {
 	m := muxWithHost(t)
 
-	prof := m.resolveProfileFallback("web1")
+	prof := m.resolveProfileFallback("web1", m.hostByAlias)
 	if prof == nil {
 		t.Fatal("resolveProfileFallback(web1) = nil")
 	}

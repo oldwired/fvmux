@@ -36,8 +36,34 @@ func (m *Mux) sshProfile(h *sshmgr.Host, alias string) *profile.Profile {
 // hostByAlias resolves alias against hosts.toml + ~/.ssh/config,
 // returning nil when unknown. Used to thread a hosts.toml entry's
 // connection fields into ssh/sftp spawns that only carry an alias.
+// One full config parse per call — fine for interactive one-shots;
+// batch callers (session restore) use hostLookupOnce instead.
 func (m *Mux) hostByAlias(alias string) *sshmgr.Host {
+	return findHostByAlias(m.loadHosts(), alias)
+}
+
+// hostLookupOnce returns an alias resolver backed by a single deferred
+// sshmgr.Load. Session restore consults the fallback once per pane;
+// re-parsing the whole ~/.ssh/config (with recursive Includes) N times
+// made large-session restores measurably slower for nothing.
+func (m *Mux) hostLookupOnce() func(alias string) *sshmgr.Host {
+	var hosts []*sshmgr.Host
+	loaded := false
+	return func(alias string) *sshmgr.Host {
+		if !loaded {
+			hosts = m.loadHosts()
+			loaded = true
+		}
+		return findHostByAlias(hosts, alias)
+	}
+}
+
+func (m *Mux) loadHosts() []*sshmgr.Host {
 	hosts, _ := sshmgr.Load(m.Opts.Paths.HostsFile())
+	return hosts
+}
+
+func findHostByAlias(hosts []*sshmgr.Host, alias string) *sshmgr.Host {
 	for _, h := range hosts {
 		if h != nil && h.Alias == alias {
 			return h

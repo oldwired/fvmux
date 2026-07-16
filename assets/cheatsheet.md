@@ -93,7 +93,7 @@
 - `C-g H` — Connect to Host…
 - `C-g B` — Edit hosts.toml
 - Active Connections…
-- Reload hosts.toml
+- Validate hosts.toml
 
 ## Transfer
 

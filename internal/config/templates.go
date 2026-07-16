@@ -210,8 +210,9 @@ const templateKeybindings = `# fvmux key bindings overrides.
 # Examples:
 #
 # [[binding]]
-# chord   = "C-g g"               # bind Ctrl-G g to "Find Window…"
-# command = "Find Window…"
+# chord   = "C-g u"               # bind Ctrl-G u to "Find Window…"
+# command = "Find Window…"       # (C-g u is unused by default — uncommenting
+#                                 # an example must never steal a factory chord)
 #
 # [[binding]]
 # chord   = "C-g w"               # unbind the default Ctrl-G w

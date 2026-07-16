@@ -14,6 +14,7 @@ import (
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
 	"github.com/oldwired/fvmux/internal/sftp"
+	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
 // SaveSession captures the current window/layout state to TOML under
@@ -135,10 +136,12 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	var failed []string
 	var activeKey views.View
 	restored := 0
+	// One hosts parse shared by every pane's profile fallback below.
+	hostLookup := m.hostLookupOnce()
 	for i, ws := range snap.Windows {
 		bounds := geom.NewRect(ws.Pos.X, ws.Pos.Y,
 			ws.Pos.X+ws.Pos.W, ws.Pos.Y+ws.Pos.H)
-		if err := m.openSnapshotWindow(ws, bounds); err != nil {
+		if err := m.openSnapshotWindow(ws, bounds, hostLookup); err != nil {
 			slog.Warn("session window failed to restore",
 				"window", ws.Title, "err", err)
 			failed = append(failed, fmt.Sprintf("%s: %v", ws.Title, err))
@@ -183,19 +186,20 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 // resolveProfileFallback fires when a saved pane's Profile name isn't
 // a registered profile. The common case is ssh sessions opened via
 // Ctrl-G H, whose Pane.Profile == the host alias. We look that alias
-// up in hosts.toml + ~/.ssh/config; on a hit, synthesize an ssh
-// command (with ControlOpts so the master is reused). Otherwise fall
-// back to the default shell profile.
-func (m *Mux) resolveProfileFallback(name string) *profile.Profile {
+// up via lookup (hosts.toml + ~/.ssh/config); on a hit, synthesize an
+// ssh command (with ControlOpts so the master is reused). Otherwise
+// fall back to the default shell profile. lookup is injected so batch
+// callers (LoadSession) can amortize one config parse across panes.
+func (m *Mux) resolveProfileFallback(name string, lookup func(string) *sshmgr.Host) *profile.Profile {
 	if name != "" && m.sshPool != nil {
-		if h := m.hostByAlias(name); h != nil {
+		if h := lookup(name); h != nil {
 			return m.sshProfile(h, h.Alias)
 		}
 	}
 	return profile.Defaults()[0]
 }
 
-func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) error {
+func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect, hostLookup func(string) *sshmgr.Host) error {
 	// Sanitize the persisted number: snapshots written before the
 	// numbering fix can contain duplicates, and a duplicate would make
 	// one window unreachable via Ctrl-G <n> forever after.
@@ -215,7 +219,7 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 			// synthesize an inline ssh profile if so. Without this
 			// fallback, restored ssh panes silently turn into
 			// generic shells.
-			prof = m.resolveProfileFallback(spec.Profile)
+			prof = m.resolveProfileFallback(spec.Profile, hostLookup)
 		}
 		pane, err := m.instantiateProfile(prof, interior)
 		if err != nil {

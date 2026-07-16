@@ -164,7 +164,11 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdConnectHost, Category: "Connections", Name: "Connect to Host…", MenuLabel: "~C~onnect to Host…", Chord: "C-g H"})
 	r.Register(&Command{ID: CmdEditHosts, Category: "Connections", Name: "Edit hosts.toml", MenuLabel: "~E~dit hosts.toml", Chord: "C-g B"})
 	r.Register(&Command{ID: CmdActiveConnections, Category: "Connections", Name: "Active Connections…", MenuLabel: "~A~ctive Connections…"})
-	r.Register(&Command{ID: CmdReloadHosts, Category: "Connections", Name: "Reload hosts.toml", MenuLabel: "~R~eload hosts.toml"})
+	// "Validate", not "Reload": nothing caches host data (every picker
+	// re-reads from disk), so the command's real value is a parse check
+	// with a visible result — naming it "Reload" implied staleness that
+	// doesn't exist.
+	r.Register(&Command{ID: CmdReloadHosts, Category: "Connections", Name: "Validate hosts.toml", MenuLabel: "~V~alidate hosts.toml"})
 
 	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "File Browser (SFTP)…", MenuLabel: "~F~ile Browser (SFTP)…", Chord: "C-g F"})
 	// F5/F6 are bidirectional inside the browser: F5 copies the highlighted

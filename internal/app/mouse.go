@@ -46,6 +46,12 @@ func (m *Mux) installMouseListener() {
 // Single point of truth — every window-creation path goes through
 // here so the bookkeeping stays in lock-step with the view tree.
 func (m *Mux) registerWindow(w *views.Window, ws *windowState) {
+	// window_shadow=false is honoured here — the single chokepoint all
+	// creation paths pass through (fv-go sets SfShadow by default).
+	// Nil-tolerant: unit tests build a bare Mux without Options.Config.
+	if cfg := m.Opts.Config; cfg != nil && !cfg.Appearance.WindowShadow {
+		w.State &^= consts.SfShadow
+	}
 	m.windows[w.Self()] = ws
 	m.windowOrder = append(m.windowOrder, w.Self())
 	w.OnClose = func() { m.cleanupWindow(ws) }

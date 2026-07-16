@@ -38,7 +38,7 @@ func TestResolveProfileFallback(t *testing.T) {
 	m.sshPool = sshmgr.NewPool(paths.ControlSocket)
 
 	// Known alias → synthesized ssh profile.
-	got := m.resolveProfileFallback("web1")
+	got := m.resolveProfileFallback("web1", m.hostByAlias)
 	if got == nil {
 		t.Fatal("resolveProfileFallback(web1) = nil")
 	}
@@ -52,7 +52,7 @@ func TestResolveProfileFallback(t *testing.T) {
 	// Unknown name → default shell profile (never an ssh spawn). Use an
 	// improbable alias so a real ~/.ssh/config on the test host can't match.
 	def := profile.Defaults()[0]
-	fallback := m.resolveProfileFallback("fvmux-nosuch-host-zzz9999")
+	fallback := m.resolveProfileFallback("fvmux-nosuch-host-zzz9999", m.hostByAlias)
 	if fallback == nil {
 		t.Fatal("resolveProfileFallback(unknown) = nil")
 	}

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/dialogs"
@@ -10,6 +11,8 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/editor"
+
+	"github.com/oldwired/fvmux/internal/atomicfile"
 )
 
 // openConfigFile opens path in a modal editor dialog. Missing files
@@ -39,7 +42,15 @@ func (m *Mux) openConfigFileWithReload(title, path string, onSave func()) {
 		return
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
+		// Same creation posture as config.SeedDefaults: atomic write,
+		// and keybindings.toml stays 0o600 (it can encode prefix-key
+		// overrides the user reasonably considers private). A plain
+		// 0o644 WriteFile here would recreate it world-readable.
+		perm := os.FileMode(0o644)
+		if filepath.Base(path) == "keybindings.toml" {
+			perm = 0o600
+		}
+		if err := atomicfile.Write(path, []byte{}, perm); err != nil {
 			msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
 				"Couldn't create %s:\n%s",
 				[]any{path, err.Error()}, msgbox.OKOnly)

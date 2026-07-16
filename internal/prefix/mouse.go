@@ -20,15 +20,15 @@ import (
 // Note: OfPreProcess on Base only affects keyboard routing. What makes
 // this work for mouse is the bounds: a 0-size view receives no clicks
 // (which is why the original 0×0 MouseView was a silent no-op and the
-// splitter ate wheel ticks as drags). ResizeTo() keeps the bounds in
+// splitter ate wheel ticks as drags). GfGrowAll keeps the bounds in
 // sync with desktop resizes.
 type MouseView struct {
 	views.Base
 	OnMouse func(ev *drivers.Event) (consume bool)
 }
 
-// NewMouseView constructs the listener spanning bounds. Use ResizeTo
-// after a desktop resize.
+// NewMouseView constructs the listener spanning bounds. GfGrowAll
+// tracks desktop resizes from then on.
 func NewMouseView(bounds geom.Rect, onMouse func(*drivers.Event) bool) *MouseView {
 	v := &MouseView{
 		Base:    views.NewBase(bounds),
@@ -37,13 +37,6 @@ func NewMouseView(bounds geom.Rect, onMouse func(*drivers.Event) bool) *MouseVie
 	v.SetSelf(v)
 	v.GrowMode = consts.GfGrowAll // follow the desktop on screen resize.
 	return v
-}
-
-// ResizeTo updates the view's bounds — used to keep up with desktop
-// growth when the host terminal is resized between events.
-func (v *MouseView) ResizeTo(bounds geom.Rect) {
-	v.Origin = bounds.A
-	v.Size = geom.Point{X: bounds.Width(), Y: bounds.Height()}
 }
 
 // Draw is a no-op so the listener is invisible.

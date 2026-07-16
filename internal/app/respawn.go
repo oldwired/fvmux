@@ -28,7 +28,7 @@ func (m *Mux) respawnPane() {
 		// resolve through the same fallback session restore uses, so a
 		// respawn reconnects to the host instead of silently spawning a
 		// local shell the user mistakes for the remote machine.
-		prof = m.resolveProfileFallback(pane.Profile)
+		prof = m.resolveProfileFallback(pane.Profile, m.hostByAlias)
 	}
 	interior := windowInterior(ws.Frame)
 	newPane, err := m.instantiateProfile(prof, interior)
