@@ -45,6 +45,37 @@ func TestSessionFile_HostileNameStaysInsideSessionsDir(t *testing.T) {
 	}
 }
 
+// TestWithRoot_MovesStateRootUnderRoot pins review finding #40: WithRoot
+// now relocates StateRoot under the new config root, so -config actually
+// isolates an instance — state.toml and the ControlMaster socket dir land
+// beside config.toml rather than at the shared global XDG state location.
+// WithRoot("") stays a no-op.
+func TestWithRoot_MovesStateRootUnderRoot(t *testing.T) {
+	p := Default().WithRoot("/tmp/x")
+	if p.Root != "/tmp/x" {
+		t.Errorf("Root = %q, want /tmp/x", p.Root)
+	}
+	if want := filepath.Join("/tmp/x", "state"); p.StateRoot != want {
+		t.Errorf("StateRoot = %q, want %q", p.StateRoot, want)
+	}
+	if got, want := p.ControlSocketDir(), filepath.Join("/tmp/x", "state", "cm"); got != want {
+		t.Errorf("ControlSocketDir = %q, want %q", got, want)
+	}
+	if got, want := p.StateFile(), filepath.Join("/tmp/x", "state", "state.toml"); got != want {
+		t.Errorf("StateFile = %q, want %q", got, want)
+	}
+	// A control socket for an alias resolves under the moved cm dir.
+	if dir := filepath.Dir(p.ControlSocket("prod")); dir != p.ControlSocketDir() {
+		t.Errorf("ControlSocket dir = %q, want %q", dir, p.ControlSocketDir())
+	}
+
+	// WithRoot("") leaves the receiver's defaults intact.
+	base := Default()
+	if got := base.WithRoot(""); got != base {
+		t.Errorf("WithRoot(\"\") = %+v, want unchanged %+v", got, base)
+	}
+}
+
 func TestControlSocket_HashedNameIsSafeAndBounded(t *testing.T) {
 	p := Paths{Root: "/cfg", StateRoot: "/state"}
 
