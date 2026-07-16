@@ -502,10 +502,18 @@ type renameClient interface {
 // doesn't exist. If it fails — which may mean "dest exists" but can
 // equally be a transient or permission error the SFTP status doesn't
 // let us distinguish — dest is moved ASIDE, never deleted: only after
-// tmp has landed at dest is the backup removed, and if the final
+// tmp has landed at dest is our backup removed, and if the final
 // rename fails the backup is moved back. The original therefore
 // survives every failure mode, and the temp copy is never removed
 // here either — no interleaving can destroy both files.
+//
+// The backup name is claimed with plain Rename, whose SFTP semantics
+// fail when the target exists (servers with the overwriting rename
+// support posix-rename and never reach this path). A name that's taken
+// — a preserved original left by a previously failed restore, or an
+// unrelated user file — is therefore never clobbered; we step to the
+// next candidate instead. Nothing here ever Removes a path we didn't
+// create in this call.
 func remoteReplace(c renameClient, tmp, dest string) error {
 	if err := c.PosixRename(tmp, dest); err == nil {
 		return nil
@@ -513,9 +521,8 @@ func remoteReplace(c renameClient, tmp, dest string) error {
 	if err := c.Rename(tmp, dest); err == nil {
 		return nil
 	}
-	backup := dest + ".replaced-fvmux"
-	_ = c.Remove(backup) // clear a stale backup left by an earlier crash
-	if err := c.Rename(dest, backup); err != nil {
+	backup, err := moveAside(c, dest)
+	if err != nil {
 		// Couldn't move the original aside — nothing has been touched.
 		return fmt.Errorf("replacing %s failed: %w (the transferred data is preserved at %s)", dest, err, tmp)
 	}
@@ -525,8 +532,31 @@ func remoteReplace(c renameClient, tmp, dest string) error {
 		}
 		return fmt.Errorf("replacing %s failed: %w (the original was restored; the transferred data is preserved at %s)", dest, err, tmp)
 	}
-	_ = c.Remove(backup)
+	_ = c.Remove(backup) // reap the backup THIS call created just above
 	return nil
+}
+
+// moveAside renames dest to a free ".replaced-fvmux" backup path and
+// returns the name that won. Collision-safe by construction: each
+// candidate is claimed via Rename (which fails on an existing target),
+// so occupied names survive untouched. Returns the last rename error
+// when every candidate fails — including the degenerate case where the
+// failures aren't collisions at all (dead link, permissions), which a
+// bounded probe keeps cheap.
+func moveAside(c renameClient, dest string) (string, error) {
+	var lastErr error
+	for i := 0; i < 8; i++ {
+		backup := dest + ".replaced-fvmux"
+		if i > 0 {
+			backup = fmt.Sprintf("%s.replaced-fvmux.%d", dest, i)
+		}
+		err := c.Rename(dest, backup)
+		if err == nil {
+			return backup, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
 }
 
 // pump is the cancel-aware copy loop. Cancellation is cooperative: the

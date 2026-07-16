@@ -523,9 +523,10 @@ func (m *Mux) connectHost() {
 	// in the pane rather than corrupting fvmux's display.
 	prof := m.sshProfile(h, h.Alias)
 	// connect_split decides how the connection lands: split the focused
-	// pane ("vertical" side-by-side / "horizontal" stacked), or open a
-	// floating window ("window", also the fallback when there's no
-	// focused pane to divide).
+	// pane — "vertical" stacks the new pane below (like Split Vertical,
+	// C-g "), "horizontal" places it beside (like Split Horizontal,
+	// C-g %) — or open a floating window ("window", also the fallback
+	// when there's no focused pane to divide).
 	switch m.Opts.Config.General.ConnectSplit {
 	case "vertical", "horizontal":
 		if ws := m.currentWindow(); ws != nil && ws.Focus != nil && ws.Focus.IsLeaf() {

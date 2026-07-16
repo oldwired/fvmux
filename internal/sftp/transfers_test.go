@@ -302,10 +302,44 @@ func TestRemoteReplace_BacksUpDestThenRenameSucceeds(t *testing.T) {
 			t.Errorf("rename[%d] = %v; want %v", i, f.renameArgs[i], want)
 		}
 	}
-	for _, rm := range f.removeCalls {
-		if rm == testDest || rm == testTmp {
-			t.Errorf("Remove(%q) — dest/tmp must never be removed", rm)
+	// Exactly one Remove: the reap of the backup THIS call created. No
+	// preemptive sweep — a pre-existing file at the backup path must
+	// never be deleted.
+	if len(f.removeCalls) != 1 || f.removeCalls[0] != testBackup {
+		t.Errorf("Remove calls = %v; want exactly the backup reap %q", f.removeCalls, testBackup)
+	}
+}
+
+// (c2) The first backup candidate is occupied — say by a preserved
+// original from a previously failed restore, or an unrelated user
+// file. It must NOT be removed; moveAside steps to the next candidate
+// and the reap targets only the backup this call created.
+func TestRemoteReplace_OccupiedBackupNeverClobbered(t *testing.T) {
+	occupied := testBackup // pre-existing file at the first candidate
+	f := &fakeRenameClient{
+		posixRename: func(_, _ string) error { return errors.New("no posix-rename ext") },
+	}
+	f.rename = func(old, new string) error {
+		switch {
+		case old == testTmp && f.renameCalls == 1:
+			return errors.New("dest exists") // optimistic rename fails
+		case new == occupied:
+			return errors.New("target exists") // candidate 0 is taken
+		default:
+			return nil
 		}
+	}
+	if err := remoteReplace(f, testTmp, testDest); err != nil {
+		t.Fatalf("remoteReplace = %v; want nil", err)
+	}
+	wantBackup := testDest + ".replaced-fvmux.1"
+	for _, rm := range f.removeCalls {
+		if rm == occupied || rm == testDest || rm == testTmp {
+			t.Errorf("Remove(%q) — occupied backup/dest/tmp must never be removed", rm)
+		}
+	}
+	if len(f.removeCalls) != 1 || f.removeCalls[0] != wantBackup {
+		t.Errorf("Remove calls = %v; want exactly the reap of %q", f.removeCalls, wantBackup)
 	}
 }
 
@@ -326,10 +360,10 @@ func TestRemoteReplace_RenameFailurePreservesDestAndTmp(t *testing.T) {
 	if !strings.Contains(err.Error(), testTmp) {
 		t.Errorf("error %q does not mention preserved tmp path %q", err.Error(), testTmp)
 	}
-	for _, rm := range f.removeCalls {
-		if rm == testDest || rm == testTmp {
-			t.Errorf("Remove(%q) — a failed replace must not delete dest or tmp", rm)
-		}
+	// Nothing may be removed on a total failure — not dest, not tmp,
+	// and no preemptive backup sweep either.
+	if len(f.removeCalls) != 0 {
+		t.Errorf("Remove calls = %v; want none on total failure", f.removeCalls)
 	}
 }
 
