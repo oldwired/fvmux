@@ -9,7 +9,7 @@ require (
 	github.com/oldwired/fv-go v0.5.0
 	github.com/pkg/sftp v1.13.10
 	github.com/shirou/gopsutil/v4 v4.26.4
-	golang.org/x/image v0.41.0
+	golang.org/x/image v0.43.0
 	golang.org/x/sys v0.44.0
 )
 
