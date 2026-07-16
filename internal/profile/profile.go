@@ -201,11 +201,15 @@ func spawnEnv(profileEnv map[string]string) []string {
 }
 
 // expandPath expands a leading "~" to $HOME and $VAR / ${VAR} forms.
+// Only bare "~" and "~/…" refer to the current user's home; the
+// "~user/…" form is left untouched (naively gluing it onto $HOME would
+// silently point the pane at $HOME/user/… — the classic pitfall) so it
+// surfaces as an honest no-such-directory error instead.
 func expandPath(s string) string {
 	if s == "" {
 		return s
 	}
-	if strings.HasPrefix(s, "~") {
+	if s == "~" || strings.HasPrefix(s, "~/") {
 		home, _ := os.UserHomeDir()
 		s = filepath.Join(home, strings.TrimPrefix(s, "~"))
 	}

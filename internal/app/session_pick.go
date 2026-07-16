@@ -154,6 +154,86 @@ func (m *Mux) saveSessionAs() {
 		"Saved as %s.", []any{name}, msgbox.OKOnly)
 }
 
+// renameSession (Ctrl-G $) renames the current named session: the file
+// on disk moves and the live name follows, so autosaves land in the new
+// file and the old name stops haunting the session picker. An un-named
+// session falls through to Save As — there's nothing on disk to rename.
+func (m *Mux) renameSession() {
+	if m.Opts.SessionName == "" {
+		m.saveSessionAs()
+		return
+	}
+	old := m.Opts.SessionName
+	name, ok := promptString(m.App, "Rename Session", "New name:", old)
+	if !ok || strings.TrimSpace(name) == "" {
+		return
+	}
+	name = strings.TrimSpace(name)
+	if name == old {
+		return
+	}
+	if err := config.ValidSessionName(name); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Invalid session name:\n%s", []any{err.Error()}, msgbox.OKOnly)
+		return
+	}
+	newPath := m.Opts.Paths.SessionFile(name)
+	if _, err := os.Stat(newPath); err == nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"A session named %q already exists.", []any{name}, msgbox.OKOnly)
+		return
+	}
+	oldPath := m.Opts.Paths.SessionFile(old)
+	if _, err := os.Stat(oldPath); err == nil {
+		if err := os.Rename(oldPath, newPath); err != nil {
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+				"Rename failed:\n%s", []any{err.Error()}, msgbox.OKOnly)
+			return
+		}
+	}
+	m.Opts.SessionName = name
+	_ = m.SaveSessionSilent()
+	m.refreshStatusBar()
+}
+
+// deleteSession (File → Delete Session…) removes a saved session file
+// picked from the list, after a confirm. Deleting the session that's
+// currently open only removes the file — the live windows stay, and
+// the name is cleared so the next Save prompts instead of silently
+// recreating the deleted file.
+func (m *Mux) deleteSession() {
+	names := m.savedSessionNames()
+	if len(names) == 0 {
+		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
+			"No saved sessions found.", msgbox.OKOnly)
+		return
+	}
+	desk := m.App.Desktop.BaseView()
+	w, h := 60, 14
+	x := (desk.Size.X - w) / 2
+	y := (desk.Size.Y - h) / 2
+	idx := fuzzyfinder.New(geom.NewRect(x, y, x+w, y+h), names).Run(&m.App.Desktop.Group)
+	if idx < 0 || idx >= len(names) {
+		return
+	}
+	pick := names[idx]
+	got := msgbox.Showf(&m.App.Desktop.Group, msgbox.Question,
+		"Delete saved session %q?\nOpen windows are unaffected.",
+		[]any{pick}, msgbox.YesNo)
+	if got != consts.CmYes {
+		return
+	}
+	if err := os.Remove(m.Opts.Paths.SessionFile(pick)); err != nil {
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
+			"Delete failed:\n%s", []any{err.Error()}, msgbox.OKOnly)
+		return
+	}
+	if m.Opts.SessionName == pick {
+		m.Opts.SessionName = ""
+		m.refreshStatusBar()
+	}
+}
+
 func (m *Mux) savedSessionNames() []string {
 	dir := filepath.Join(m.Opts.Paths.Root, "sessions")
 	entries, err := os.ReadDir(dir)

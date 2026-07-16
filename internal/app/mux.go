@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -301,6 +302,8 @@ func (m *Mux) wireActions() {
 
 	bind(commands.CmdNewSession, m.newSession)
 	bind(commands.CmdOpenSession, m.openSessionPicker)
+	bind(commands.CmdRenameSession, m.renameSession)
+	bind(commands.CmdDeleteSession, m.deleteSession)
 	bind(commands.CmdSaveSessionAs, m.saveSessionAs)
 	bind(commands.CmdRenamePane, m.renamePane)
 	bind(commands.CmdToggleClock, m.toggleClock)
@@ -479,7 +482,8 @@ func (m *Mux) connectHost() {
 // arbitrary Profile (used for ad-hoc spawns like ssh hosts).
 func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error) {
 	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
-	w := views.NewWindow(bounds, prof.Title, len(m.windowOrder)+1)
+	num := m.nextWindowNumber()
+	w := views.NewWindow(bounds, prof.Title, num)
 	interior := windowInterior(w)
 	pane, err := m.instantiateProfile(prof, interior)
 	if err != nil {
@@ -489,7 +493,7 @@ func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error
 	root := layout.Leaf(pane)
 	state := &windowState{
 		ID:     session.NewWindowID(),
-		Number: len(m.windowOrder) + 1,
+		Number: num,
 		Title:  prof.Title,
 		Frame:  w,
 		Root:   root,
@@ -520,9 +524,13 @@ func (m *Mux) showThemePicker() {
 // default profile from config is used.
 func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	var prof *profile.Profile
+	var missing string // requested profile that doesn't exist, for the warning
 	switch {
 	case profileName != "":
 		prof = profile.Find(m.Opts.Profiles, profileName)
+		if prof == nil {
+			missing = profileName
+		}
 	case m.Opts.Config.General.NewWindowCommand != "":
 		// Ad-hoc shell command override; the user wants Ctrl-G c to
 		// run something other than the configured default profile.
@@ -533,14 +541,31 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 			Args:    args,
 		}
 	default:
-		prof = profile.Find(m.Opts.Profiles, m.Opts.Config.General.DefaultProfile)
+		name := m.Opts.Config.General.DefaultProfile
+		prof = profile.Find(m.Opts.Profiles, name)
+		if prof == nil && name != "" {
+			missing = name
+		}
 	}
 	if prof == nil {
 		prof = profile.Defaults()[0]
 	}
+	if missing != "" {
+		// A typo'd -profile flag or stale default_profile must not
+		// silently open a generic shell the user mistakes for their
+		// profile. Deferred via CallSoon: at startup this runs before
+		// the event loop.
+		slog.Warn("profile not found, using default shell", "profile", missing)
+		views.CallSoon(func() {
+			msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
+				"Profile %q not found — opened the default shell instead.",
+				[]any{missing}, msgbox.OKOnly)
+		})
+	}
 
 	bounds := m.cascadedBoundsFor(prof.WindowWidth, prof.WindowHeight)
-	w := views.NewWindow(bounds, prof.Name, len(m.windowOrder)+1)
+	num := m.nextWindowNumber()
+	w := views.NewWindow(bounds, prof.Name, num)
 	interior := windowInterior(w)
 
 	pane, err := m.instantiateProfile(prof, interior)
@@ -556,7 +581,7 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 	root := layout.Leaf(pane)
 	ws := &windowState{
 		ID:     session.NewWindowID(),
-		Number: len(m.windowOrder) + 1,
+		Number: num,
 		Title:  prof.Name,
 		Frame:  w,
 		Root:   root,
@@ -823,6 +848,29 @@ func (m *Mux) currentWindow() *windowState {
 	return m.windows[cur]
 }
 
+// nextWindowNumber returns the lowest positive number no live window
+// holds. The old len(windowOrder)+1 scheme duplicated numbers: close
+// window 2 of 3, open a new one, and two windows both badge "3" — the
+// newer unreachable via Ctrl-G 3, and the duplicates persisted into
+// session snapshots.
+func (m *Mux) nextWindowNumber() int {
+	for n := 1; ; n++ {
+		if !m.windowNumberInUse(n) {
+			return n
+		}
+	}
+}
+
+// windowNumberInUse reports whether any live window carries number n.
+func (m *Mux) windowNumberInUse(n int) bool {
+	for _, ws := range m.windows {
+		if ws != nil && ws.Number == n {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Mux) doSplit(vertical bool) {
 	ws := m.currentWindow()
 	if ws == nil || ws.Focus == nil || !ws.Focus.IsLeaf() {
@@ -949,12 +997,13 @@ func (m *Mux) doBreakOut() {
 
 	// Open a new window with the detached pane as its only leaf.
 	bounds := m.cascadedBounds()
-	w := views.NewWindow(bounds, newWinRoot.Pane.Title, len(m.windowOrder)+1)
+	num := m.nextWindowNumber()
+	w := views.NewWindow(bounds, newWinRoot.Pane.Title, num)
 	interior := windowInterior(w)
 	m.wireTerminalCallbacks(newWinRoot.Pane, w)
 	newWs := &windowState{
 		ID:     session.NewWindowID(),
-		Number: len(m.windowOrder) + 1,
+		Number: num,
 		Title:  newWinRoot.Pane.Title,
 		Frame:  w,
 		Root:   newWinRoot,

@@ -196,7 +196,14 @@ func (m *Mux) resolveProfileFallback(name string) *profile.Profile {
 }
 
 func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) error {
-	w := views.NewWindow(bounds, ws.Title, ws.Number)
+	// Sanitize the persisted number: snapshots written before the
+	// numbering fix can contain duplicates, and a duplicate would make
+	// one window unreachable via Ctrl-G <n> forever after.
+	num := ws.Number
+	if num <= 0 || m.windowNumberInUse(num) {
+		num = m.nextWindowNumber()
+	}
+	w := views.NewWindow(bounds, ws.Title, num)
 	interior := windowInterior(w)
 
 	var spawned []*session.Pane
@@ -238,7 +245,7 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect) e
 	leaves := root.CollectLeaves()
 	state := &windowState{
 		ID:        session.WindowID(ws.ID),
-		Number:    ws.Number,
+		Number:    num,
 		Title:     ws.Title,
 		UserTitle: ws.UserTitle,
 		Frame:     w,

@@ -124,19 +124,21 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 		})
 	}
 	appendRing(e)
-	// Read sink under the same lock that protects sinkClose so a
-	// concurrent Close can't race with an in-flight write.
+	// Hold the lock ACROSS the write, not just for reading the pointer:
+	// copying sink and unlocking first let a concurrent Close() close
+	// the file mid-write, silently discarding the final entries — the
+	// shutdown/panic diagnostics the user most needs. Write contention
+	// is negligible at log rates.
 	mu.Lock()
-	w := sink
-	mu.Unlock()
-	if w != nil {
-		_, _ = fmt.Fprintf(w, "%s [%s] %s %s\n",
+	if sink != nil {
+		_, _ = fmt.Fprintf(sink, "%s [%s] %s %s\n",
 			e.Time.Format("2006-01-02T15:04:05.000"),
 			levelString(e.Level),
 			e.Source,
 			formatAttrs(e.Msg, h.attrs, &r),
 		)
 	}
+	mu.Unlock()
 	return nil
 }
 

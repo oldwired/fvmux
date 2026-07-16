@@ -57,6 +57,14 @@ func (m *Mux) toggleMenuBar() {
 		m.App.SetMenuBar(nil)
 		return
 	}
+	// Re-show through the canonical RefreshUI rebuild — a direct
+	// menus.Build here would drop the dynamic Extras submenus (Active
+	// Masters, Active Transfers) and leave the Mux dispatch table
+	// stale, silently diverging from every other menu refresh.
+	if m.Opts.RefreshUI != nil {
+		m.Opts.RefreshUI()
+		return
+	}
 	desk := m.App.BaseView().Size
 	m.App.SetMenuBar(menus.Build(geom.NewRect(0, 0, desk.X, 1), m.Reg))
 }

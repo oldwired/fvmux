@@ -103,8 +103,12 @@ const (
 	// 1068s — session lifecycle + view toggles + misc utility.
 	CmdOpenSession   uint16 = 1068 // Ctrl-G s
 	CmdSaveSessionAs uint16 = 1069
-	// 1070 was CmdRenameSession (Ctrl-G $); dropped — Save As covers
-	// the rename-on-write case and is the only path the UI exposes.
+	// CmdRenameSession renames the current session's file on disk and
+	// updates the live name (Ctrl-G $, as the plan documents). It was
+	// briefly dropped in favour of Save As, but Save As leaves the old
+	// file behind — stale sessions haunted the picker with no way to
+	// remove them (paired with CmdDeleteSession below).
+	CmdRenameSession   uint16 = 1070 // Ctrl-G $
 	CmdNewSession      uint16 = 1078 // File → New Session (close all, open one starter)
 	CmdRenamePane      uint16 = 1071
 	CmdToggleClock     uint16 = 1072 // Ctrl-G t
@@ -123,6 +127,11 @@ const (
 
 	// 1115 — about / credits.
 	CmdAbout uint16 = 1115 // Help → About fvmux…
+
+	// CmdDeleteSession removes a saved session file picked from the
+	// session list (File → Delete Session…). No default chord — it's a
+	// destructive, occasional action; menu + palette reach it.
+	CmdDeleteSession uint16 = 1116
 
 	// 1090s — window list / find
 	CmdWindowList uint16 = 1090 // Ctrl-G w

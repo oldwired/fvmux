@@ -84,6 +84,16 @@ func (m *Mux) joinFrom() {
 		return
 	}
 	dst.Root = newRoot
+	// Re-wire terminal callbacks for every pane now living under the
+	// destination window: the moved panes' OnTitle/OnExit closures
+	// captured the SOURCE window, which is about to be deleted — their
+	// title updates would resolve a nil windowState forever after.
+	// (Re-wiring the destination's own panes is an idempotent refresh.)
+	dst.Root.Leaves(func(l *layout.PaneNode) {
+		if l.Pane != nil {
+			m.wireTerminalCallbacks(l.Pane, dst.Frame)
+		}
+	})
 	// Source window is now empty; close it (cleanup stops the moved
 	// pane's terminal? — NO. The pane moved by JoinFrom is the same
 	// *session.Pane reference; we must NOT call Stop on it. Drop the

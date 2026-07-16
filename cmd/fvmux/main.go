@@ -138,7 +138,11 @@ func run() error {
 		if mux != nil {
 			extras = mux.BuildMenuExtras()
 		}
-		a.SetMenuBar(menus.BuildWithExtras(geom.NewRect(0, 0, cols, 1), reg, extras))
+		// Read the desktop width at rebuild time — capturing the startup
+		// cols would size every later rebuild (theme save, reload,
+		// wizard) to the original terminal width.
+		w := a.BaseView().Size.X
+		a.SetMenuBar(menus.BuildWithExtras(geom.NewRect(0, 0, w, 1), reg, extras))
 	}
 
 	bar := statusbar.Build(

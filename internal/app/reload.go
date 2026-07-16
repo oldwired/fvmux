@@ -25,6 +25,12 @@ func (m *Mux) ReloadConfig() {
 
 	if cfg, err := config.Load(paths.ConfigFile()); err == nil {
 		m.Opts.Config = cfg
+		// The status bar copied ClockFormat once at Build time —
+		// forward the (possibly changed) format or "Reload Config"
+		// silently doesn't reload one of the settings it claims to.
+		if m.Opts.StatusBar != nil {
+			m.Opts.StatusBar.ClockFormat = cfg.Appearance.StatusClock
+		}
 	} else {
 		slog.Warn("reload: config.toml", "err", err)
 		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
