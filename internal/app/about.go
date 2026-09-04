@@ -39,11 +39,13 @@ const aboutBody = "" +
 	"\n" +
 	"  Full third-party notices: fvmux.spdx.json (release page)."
 
+const aboutDialogWidth = 70
+
 // showAbout opens a centred modal with version + license credits.
 // Wired to commands.CmdAbout — appears as Help → About fvmux…
 func (m *Mux) showAbout() {
 	desk := m.App.Desktop.BaseView()
-	r := ui.CenterRect(desk.Size, 66, 22, 2)
+	r := ui.CenterRect(desk.Size, aboutDialogWidth, 22, 2)
 	x, y, w, h := r.A.X, r.A.Y, r.Width(), r.Height()
 
 	body := fmt.Sprintf(aboutBody, m.Opts.Version)

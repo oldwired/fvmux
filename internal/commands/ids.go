@@ -23,7 +23,7 @@ const (
 	CmdQuit                 uint16 = 1003
 	CmdNextWindow           uint16 = 1004 // Ctrl-G n
 	CmdPrevWindow           uint16 = 1005 // Ctrl-G p
-	CmdKillWindow           uint16 = 1006 // Ctrl-G &
+	CmdKillWindow           uint16 = 1006 // Ctrl-G X
 	CmdSaveSession          uint16 = 1007 // Ctrl-G S
 	CmdRenameWindow         uint16 = 1008 // Ctrl-G ,
 	CmdLastWindow           uint16 = 1009 // Ctrl-G Tab

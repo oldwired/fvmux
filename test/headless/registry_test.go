@@ -50,7 +50,7 @@ func TestCheatsheetIncludesKnownBindings(t *testing.T) {
 	md := cheatsheet.Generate(reg)
 	for _, want := range []string{
 		"C-g c", "C-g %", "C-g \"", "C-g x", "C-g z",
-		"C-g P", "C-g ?", "C-g h", "C-g j", "C-g k", "C-g l",
+		"C-g P", "C-g ?", "C-g X", "C-g h", "C-g j", "C-g k", "C-g l",
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("cheatsheet missing chord %q", want)
@@ -58,6 +58,16 @@ func TestCheatsheetIncludesKnownBindings(t *testing.T) {
 	}
 	if !strings.Contains(md, "## Pane") {
 		t.Error("cheatsheet missing Pane category header")
+	}
+}
+
+func TestKillWindowUsesDeliberateShiftedBinding(t *testing.T) {
+	reg := commands.Defaults()
+	if got := reg.LookupChord("C-g X"); got == nil || got.ID != commands.CmdKillWindow {
+		t.Fatalf("C-g X binding = %#v, want Kill Window", got)
+	}
+	if got := reg.LookupChord("C-g &"); got != nil {
+		t.Fatalf("legacy C-g & binding still active: %#v", got)
 	}
 }
 

@@ -82,7 +82,7 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdNewWindowFromProfile, Category: "File", Name: "New Window from Profile", MenuLabel: "New Window from ~P~rofile…", Chord: "C-g C"})
 	r.Register(&Command{ID: CmdNextWindow, Category: "Window", Name: "Next Window", MenuLabel: "N~e~xt Window", Chord: "C-g n"})
 	r.Register(&Command{ID: CmdPrevWindow, Category: "Window", Name: "Previous Window", MenuLabel: "~P~revious Window", Chord: "C-g p"})
-	r.Register(&Command{ID: CmdKillWindow, Category: "Window", Name: "Kill Window", MenuLabel: "~K~ill Window", Chord: "C-g &"})
+	r.Register(&Command{ID: CmdKillWindow, Category: "Window", Name: "Kill Window", MenuLabel: "~K~ill Window", Chord: "C-g X"})
 	r.Register(&Command{ID: CmdSaveSession, Category: "File", Name: "Save Session", MenuLabel: "~S~ave Session", Chord: "C-g S"})
 	r.Register(&Command{ID: CmdRenameWindow, Category: "Window", Name: "Rename Window…", MenuLabel: "~R~ename Window…", Chord: "C-g ,"})
 

@@ -112,10 +112,37 @@ func writeCategory(b *strings.Builder, reg *commands.Registry, category string) 
 			b.WriteString(c.Chord)
 			b.WriteString("` — ")
 		}
-		b.WriteString(c.Name)
+		b.WriteString(highlightMenuAccelerator(c.Name, c.MenuLabel))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
+}
+
+// highlightMenuAccelerator transfers the Borland-style ~X~ marker from a
+// menu label onto the same character in the command's more descriptive name.
+// MarkdownView renders that span with its brighter emphasis color. Keeping the
+// command name preserves useful suffixes that menus omit, such as "(Ctrl-C)".
+func highlightMenuAccelerator(name, menuLabel string) string {
+	start := strings.IndexByte(menuLabel, '~')
+	if start < 0 {
+		return name
+	}
+	relEnd := strings.IndexByte(menuLabel[start+1:], '~')
+	if relEnd < 0 {
+		return name
+	}
+	end := start + 1 + relEnd
+	plainLabel := menuLabel[:start] + menuLabel[start+1:end] + menuLabel[end+1:]
+	nameBase := strings.Index(name, plainLabel)
+	if nameBase < 0 {
+		nameBase = strings.Index(strings.ToLower(name), strings.ToLower(plainLabel))
+	}
+	if nameBase < 0 {
+		return name
+	}
+	hotStart := nameBase + start
+	hotEnd := hotStart + len(menuLabel[start+1:end])
+	return name[:hotStart] + "**" + name[hotStart:hotEnd] + "**" + name[hotEnd:]
 }
 
 func activePrefix(reg *commands.Registry) string {

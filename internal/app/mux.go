@@ -946,6 +946,7 @@ func (m *Mux) resetFirstRunWizard() {
 // command, generated live from the registry.
 func (m *Mux) ShowCheatsheet() {
 	cheatsheet.Show(m.App, m.Reg)
+	m.raiseMouseListener()
 }
 
 func (m *Mux) currentWindow() *windowState {

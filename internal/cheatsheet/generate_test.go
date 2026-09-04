@@ -40,6 +40,38 @@ func TestGenerateUsesActivePrefixInContextualHelp(t *testing.T) {
 	}
 }
 
+func TestGenerateHighlightsMenuAccelerators(t *testing.T) {
+	got := GenerateBaked(commands.Defaults())
+	for _, want := range []string{
+		"- `C-g c` — **N**ew Window",
+		"- **Q**uit fvmux",
+		"- `C-g X` — **K**ill Window",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated cheatsheet missing highlighted menu accelerator %q", want)
+		}
+	}
+}
+
+func TestHighlightMenuAccelerator(t *testing.T) {
+	for _, tt := range []struct {
+		label string
+		menu  string
+		want  string
+	}{
+		{label: "Kill Window", menu: "~K~ill Window", want: "**K**ill Window"},
+		{label: "Focus Up", menu: "Focus ~U~p", want: "Focus **U**p"},
+		{label: "Send Interrupt (Ctrl-C)", menu: "Send ~I~nterrupt", want: "Send **I**nterrupt (Ctrl-C)"},
+		{label: "No marker", menu: "No marker", want: "No marker"},
+		{label: "Unmatched marker", menu: "Unmatched ~ marker", want: "Unmatched marker"},
+		{label: "Different wording", menu: "No ~m~atch", want: "Different wording"},
+	} {
+		if got := highlightMenuAccelerator(tt.label, tt.menu); got != tt.want {
+			t.Errorf("highlightMenuAccelerator(%q, %q) = %q, want %q", tt.label, tt.menu, got, tt.want)
+		}
+	}
+}
+
 // TestGenerateBakedDeterministic confirms the baked generator omits the
 // date-dependent whimsy footer, so repeated runs (and CI on any day) agree.
 func TestGenerateBakedDeterministic(t *testing.T) {

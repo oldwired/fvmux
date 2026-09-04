@@ -7,14 +7,15 @@ import (
 )
 
 const (
-	ScopeMenu     = "Menu activation and navigation"
-	ScopeTerminal = "Embedded terminal and scrollback"
-	ScopeCopy     = "Copy mode"
-	ScopeResize   = "Resize mode"
-	ScopeFiles    = "Files / SFTP window"
-	ScopeDialogs  = "Dialogs and pickers"
-	ScopeWrapper  = "fvmuxa / tmux wrapper"
-	ScopePlatform = "Platform, layout, and protocol notes"
+	ScopeMenu       = "Menu activation and navigation"
+	ScopeTerminal   = "Embedded terminal and scrollback"
+	ScopeCopy       = "Copy mode"
+	ScopeResize     = "Resize mode"
+	ScopeFiles      = "Files / SFTP window"
+	ScopeCheatsheet = "Cheatsheet window"
+	ScopeDialogs    = "Dialogs and pickers"
+	ScopeWrapper    = "fvmuxa / tmux wrapper"
+	ScopePlatform   = "Platform, layout, and protocol notes"
 )
 
 // ContextBinding is one non-registry shortcut or keyboard compatibility note.
@@ -31,7 +32,7 @@ type ContextBinding struct {
 // Scopes fixes the deterministic output order.
 var Scopes = []string{
 	ScopeMenu, ScopeTerminal, ScopeCopy, ScopeResize, ScopeFiles,
-	ScopeDialogs, ScopeWrapper, ScopePlatform,
+	ScopeCheatsheet, ScopeDialogs, ScopeWrapper, ScopePlatform,
 }
 
 // Catalogue is the single source of truth for contextual keyboard behavior.
@@ -70,6 +71,10 @@ var Catalogue = []ContextBinding{
 	{Scope: ScopeFiles, Chord: "Ctrl-R", Action: "Refresh both panels", Compact: "Ctrl-R refresh"},
 	{Scope: ScopeFiles, Chord: "Delete", Action: "Cancel the newest active transfer"},
 	{Scope: ScopeFiles, Chord: "Esc", Action: "Close the Files window"},
+
+	{Scope: ScopeCheatsheet, Chord: "/", Action: "Fuzzy-search every reference entry"},
+	{Scope: ScopeCheatsheet, Chord: "Arrows / PgUp / PgDn / Home / End", Action: "Scroll the reference"},
+	{Scope: ScopeCheatsheet, Chord: "Esc", Action: "Clear a text selection or close the Cheatsheet window"},
 
 	{Scope: ScopeDialogs, Chord: "Tab / Shift-Tab", Action: "Move focus between controls"},
 	{Scope: ScopeDialogs, Chord: "Arrows", Action: "Move within lists and popup choices"},

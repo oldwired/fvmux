@@ -6,78 +6,78 @@ Global commands use the configured prefix. Contextual keys apply only in the nam
 
 ### File
 
-- `C-g c` — New Window
-- Quit fvmux
+- `C-g c` — **N**ew Window
+- **Q**uit fvmux
 - `C-g C` — New Window from Profile
-- `C-g S` — Save Session
-- New Session
-- `C-g s` — Open Session…
-- Save Session As…
-- `C-g $` — Rename Session…
-- Delete Session…
-- `C-g D` — Detach from tmux
-- `C-g :` — Run Command…
-- Edit config.toml
-- Edit profiles.toml
-- Edit keybindings.toml
+- `C-g S` — **S**ave Session
+- Ne**w** Session
+- `C-g s` — **O**pen Session…
+- Save Session **A**s…
+- `C-g $` — Rena**m**e Session…
+- De**l**ete Session…
+- `C-g D` — **D**etach from tmux
+- `C-g :` — **R**un Command…
+- Edit **c**onfig.toml
+- Edit pro**f**iles.toml
+- Edit **k**eybindings.toml
 
 ### Edit
 
-- `C-g [` — Enter Copy Mode
-- `C-g ]` — Paste
-- `C-g /` — Find in Scrollback
-- `C-g ~` — Toggle Sync-Input (broadcast)
-- Send Interrupt (Ctrl-C)
-- Send Quit (Ctrl-\)
-- Send EOF (Ctrl-D)
-- Send SIGTERM
+- `C-g [` — Enter **C**opy Mode
+- `C-g ]` — **P**aste
+- `C-g /` — **F**ind in Scrollback
+- `C-g ~` — Toggle **S**ync-Input (broadcast)
+- Send **I**nterrupt (Ctrl-C)
+- Send **Q**uit (Ctrl-\)
+- Send **E**OF (Ctrl-D)
+- Send SIG**T**ERM
 
 ### View
 
-- `C-g z` — Zoom Focused Pane
-- `C-g t` — Toggle Clock
-- Toggle Status Bar
-- Toggle Menu Bar
+- `C-g z` — **Z**oom Focused Pane
+- `C-g t` — Toggle **C**lock
+- Toggle **S**tatus Bar
+- Toggle **M**enu Bar
 - `C-g m` — Activate Menu Bar
-- `C-g r` — Redraw
-- `C-g q` — Flash Window Numbers
-- Layout: Even Horizontal
-- Layout: Even Vertical
-- Layout: Main Horizontal
-- Layout: Main Vertical
-- Layout: Tiled
-- `C-g T` — Theme…
-- Edit Themes…
-- `C-g Space` — Cycle Layout
+- `C-g r` — **R**edraw
+- `C-g q` — Flash Window **N**umbers
+- Layout: Even **H**orizontal
+- Layout: Even **V**ertical
+- Layout: Main H**o**rizontal
+- Layout: Main Ve**r**tical
+- Layout: **T**iled
+- `C-g T` — **T**heme…
+- **E**dit Themes…
+- `C-g Space` — Cycle **L**ayout
 
 ### Pane
 
-- `C-g %` — Split Left/Right
-- `C-g "` — Split Top/Bottom
-- `C-g x` — Kill Pane
-- `C-g h` — Focus Left
-- `C-g j` — Focus Down
-- `C-g k` — Focus Up
-- `C-g l` — Focus Right
-- `C-g }` — Swap with Next
-- `C-g {` — Swap with Prev
-- `C-g !` — Break Out to Window
-- Rename Pane…
-- `C-g @` — Join from Window…
-- `C-g o` — Focus Next Pane
+- `C-g %` — Split Left/Ri**g**ht
+- `C-g "` — Split **T**op/Bottom
+- `C-g x` — **K**ill Pane
+- `C-g h` — Focus **L**eft
+- `C-g j` — Focus **D**own
+- `C-g k` — Focus **U**p
+- `C-g l` — Focus **R**ight
+- `C-g }` — Swap with **N**ext
+- `C-g {` — S**w**ap with Prev
+- `C-g !` — **B**reak Out to Window
+- Rename **P**ane…
+- `C-g @` — **J**oin from Window…
+- `C-g o` — Focus N**e**xt Pane
 - `C-g ;` — Focus Previous Pane
-- Respawn Dead Pane
-- `C-g R` — Enter Resize Mode
+- Re**s**pawn Dead Pane
+- `C-g R` — Enter **R**esize Mode
 
 ### Window
 
-- `C-g n` — Next Window
-- `C-g p` — Previous Window
-- `C-g &` — Kill Window
-- `C-g ,` — Rename Window…
-- `C-g Tab` — Last Window (MRU)
-- `C-g w` — Window List…
-- `C-g f` — Find Window…
+- `C-g n` — N**e**xt Window
+- `C-g p` — **P**revious Window
+- `C-g X` — **K**ill Window
+- `C-g ,` — **R**ename Window…
+- `C-g Tab` — **L**ast Window (MRU)
+- `C-g w` — Window L**i**st…
+- `C-g f` — **F**ind Window…
 - `C-g 1` — Focus Window 1
 - `C-g 2` — Focus Window 2
 - `C-g 3` — Focus Window 3
@@ -87,38 +87,38 @@ Global commands use the configured prefix. Contextual keys apply only in the nam
 - `C-g 7` — Focus Window 7
 - `C-g 8` — Focus Window 8
 - `C-g 9` — Focus Window 9
-- `C-g g` — Tile (grid)
-- `C-g G` — Tile Horizontal
-- `C-g v` — Tile Vertical
-- `C-g K` — Cascade
-- Cascade (keep sizes)
+- `C-g g` — **T**ile (grid)
+- `C-g G` — Tile **H**orizontal
+- `C-g v` — Tile **V**ertical
+- `C-g K` — **C**ascade
+- Cascade (keep si**z**es)
 
 ### Connections
 
-- `C-g H` — Connect to Host…
-- `C-g B` — Edit hosts.toml
-- SSH Connection Diagnostics…
-- Validate hosts.toml
+- `C-g H` — **C**onnect to Host…
+- `C-g B` — **E**dit hosts.toml
+- SSH Connection **D**iagnostics…
+- **V**alidate hosts.toml
 
 ### Transfer
 
-- `C-g F` — Files Window…
-- Open Files Here
-- Open Another Files Window Here
-- Follow Terminal Directory
-- Copy to Other Side (F5)
-- Move / Rename (F6)
-- Active Transfers…
-- Clear Completed Transfers
+- `C-g F` — **F**iles Window…
+- Open Files **H**ere
+- Open Another Files **W**indow Here
+- Follow Terminal **D**irectory
+- C**o**py to Other Side (F5)
+- **M**ove / Rename (F6)
+- **A**ctive Transfers…
+- **C**lear Completed Transfers
 
 ### Help
 
-- `C-g ?` — Cheatsheet
+- `C-g ?` — **C**heatsheet
 - `C-g P` — Command Palette
-- `C-g W` — Reset First-Run Wizard…
-- Reload Config
-- `C-g L` — Log Viewer
-- About fvmux…
+- `C-g W` — **R**eset First-Run Wizard…
+- Re**l**oad Config
+- `C-g L` — Lo**g** Viewer
+- **A**bout fvmux…
 
 ## Menu activation and navigation
 
@@ -163,6 +163,12 @@ Global commands use the configured prefix. Contextual keys apply only in the nam
 - **Ctrl-R** — Refresh both panels.
 - **Delete** — Cancel the newest active transfer.
 - **Esc** — Close the Files window.
+
+## Cheatsheet window
+
+- **/** — Fuzzy-search every reference entry.
+- **Arrows / PgUp / PgDn / Home / End** — Scroll the reference.
+- **Esc** — Clear a text selection or close the Cheatsheet window.
 
 ## Dialogs and pickers
 

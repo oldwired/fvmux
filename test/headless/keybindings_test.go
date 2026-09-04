@@ -18,7 +18,7 @@ func TestKeybindingsOverrideAppliesUserChord(t *testing.T) {
 	path := filepath.Join(dir, "keybindings.toml")
 	body := `
 [[binding]]
-chord = "C-g X"
+chord = "C-g u"
 command = "Kill Pane"
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
@@ -39,13 +39,13 @@ command = "Kill Pane"
 	reg := commands.Defaults()
 	reg.ApplyOverrides(overrides)
 
-	got := reg.LookupChord("C-g X")
+	got := reg.LookupChord("C-g u")
 	if got == nil {
-		t.Fatal("LookupChord C-g X = nil after ApplyOverrides")
+		t.Fatal("LookupChord C-g u = nil after ApplyOverrides")
 		return
 	}
 	if got.Name != "Kill Pane" {
-		t.Errorf("C-g X bound to %q, want %q", got.Name, "Kill Pane")
+		t.Errorf("C-g u bound to %q, want %q", got.Name, "Kill Pane")
 	}
 }
 
