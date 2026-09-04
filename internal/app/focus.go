@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/oldwired/fvmux/internal/copymode"
 	"github.com/oldwired/fvmux/internal/layout"
+	"github.com/oldwired/fvmux/internal/session"
 )
 
 // setPaneFocus is the single state transition for pane focus. It rejects
@@ -23,6 +24,12 @@ func (m *Mux) setPaneFocus(ws *windowState, next *layout.PaneNode) bool {
 	}
 
 	ws.Focus = next
+	if next.Pane.SSHAlias != "" {
+		if m.lastSSHPane == nil {
+			m.lastSSHPane = make(map[string]*session.Pane)
+		}
+		m.lastSSHPane[next.Pane.SSHAlias] = next.Pane
+	}
 	ws.ShellTitle = next.Pane.ShellTitle
 	zoomMoved := ws.Zoomed != nil && *ws.Zoomed != next.Pane.ID
 	if ws.Zoomed != nil {

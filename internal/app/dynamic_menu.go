@@ -2,9 +2,7 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/oldwired/fvmux/internal/menus"
 	"github.com/oldwired/fvmux/internal/sftp"
@@ -84,31 +82,22 @@ func (m *Mux) BuildMenuExtras() menus.Extras {
 	// dynamic submenus — Ctrl-G T, Ctrl-G C, and Ctrl-G s each own a
 	// fuzzy picker so there's one obvious surface per kind.
 
-	// Active SSH masters.
-	if m.sshPool != nil {
-		for _, c := range m.sshPool.Snapshot() {
-			c := c
-			label := fmt.Sprintf("%s — %d ref, up %s",
-				c.Alias, c.Refs, time.Since(c.Started).Truncate(time.Second))
-			ex.Connections = append(ex.Connections, menus.ExtrasItem{
-				Label: label,
-				Cm:    alloc(func() { /* read-only entry; click does nothing */ }),
-			})
-		}
-	}
-
-	// Active SFTP transfers across every open browser.
+	// Active SFTP transfers across every open Files window.
 	for _, mgr := range sftp.LiveManagers() {
 		for _, t := range mgr.Snapshot() {
 			t := t
-			short := filepath.Base(t.LocalPath)
+			route := t.LocalPath + " → " + t.RemotePath
 			if t.Direction == sftp.Download {
-				short = filepath.Base(t.RemotePath)
+				route = t.RemotePath + " → " + t.LocalPath
 			}
-			label := fmt.Sprintf("%s — %d/%d bytes", short, t.Bytes(), t.Size)
+			label := fmt.Sprintf("[%s] %s · %s — %d/%d bytes", mgr.Alias, sftp.StatusName(t.Status()), route, t.Bytes(), t.Size)
 			ex.Transfers = append(ex.Transfers, menus.ExtrasItem{
 				Label: label,
-				Cm:    alloc(func() { /* read-only */ }),
+				Cm: alloc(func() {
+					if fw := m.filesForAlias(mgr.Alias); fw != nil {
+						m.focusWindowView(fw.Frame.Self())
+					}
+				}),
 			})
 		}
 	}

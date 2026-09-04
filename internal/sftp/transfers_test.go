@@ -518,3 +518,21 @@ func TestSyncWidget_ClampsHugeSizesWithoutOverflow(t *testing.T) {
 		t.Fatalf("progress ratio %.2f not ≈ 0.5", ratio)
 	}
 }
+
+func TestSyncWidgetCaptionExplainsHostStateAndRoute(t *testing.T) {
+	m := NewManager("prod")
+	tr := &Transfer{Direction: Upload, LocalPath: "/work/report.csv", RemotePath: "/srv/app/report.csv", Size: 10, StartedAt: time.Now()}
+	tr.status.Store(StatusQueued)
+	m.list = append(m.list, tr)
+	tp := taskprogress.New(geom.NewRect(0, 0, 120, 4))
+	m.SyncWidget(tp)
+	if len(tp.Tasks) != 1 {
+		t.Fatalf("tasks=%d", len(tp.Tasks))
+	}
+	caption := tp.Tasks[0].Caption
+	for _, want := range []string{"[prod]", "queued", "/work/report.csv", "/srv/app/report.csv", "→"} {
+		if !strings.Contains(caption, want) {
+			t.Errorf("caption %q missing %q", caption, want)
+		}
+	}
+}

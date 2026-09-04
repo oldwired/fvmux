@@ -2,11 +2,13 @@ package sftp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 
 	pkgsftp "github.com/pkg/sftp"
 
@@ -25,11 +27,12 @@ var ErrAuthRequired = errors.New("ssh authentication needs interaction")
 // system ssh keeps known_hosts verification, ssh-agent, and ProxyCommand
 // behaving exactly as the user expects from their other ssh-based tools.
 type Client struct {
-	cmd    *exec.Cmd
-	sftp   *pkgsftp.Client
-	in     io.WriteCloser
-	out    io.ReadCloser
-	stderr *bytes.Buffer
+	cmd       *exec.Cmd
+	sftp      *pkgsftp.Client
+	in        io.WriteCloser
+	out       io.ReadCloser
+	stderr    *bytes.Buffer
+	closeOnce sync.Once
 }
 
 // Open spawns ssh and negotiates an SFTP session against alias.
@@ -47,12 +50,20 @@ type Client struct {
 // tells the user to authenticate via Ctrl-G H first (that path runs
 // inside a real PTY pane where prompts are renderable).
 func Open(alias, controlPath string, hostOpts []string) (*Client, error) {
+	return OpenContext(context.Background(), alias, controlPath, hostOpts)
+}
+
+// OpenContext is Open with a cancellable ssh subprocess lifetime. Cancelling
+// ctx interrupts both the ssh connection attempt and SFTP negotiation, which
+// lets the owning workspace/session prevent a late browser from appearing
+// after it has already been closed or replaced.
+func OpenContext(ctx context.Context, alias, controlPath string, hostOpts []string) (*Client, error) {
 	args := []string{}
 	args = append(args, sshmgr.ControlOpts(controlPath)...)
 	args = append(args, hostOpts...)
 	args = append(args, "-o", "BatchMode=yes")
 	args = append(args, "-s", alias, "sftp")
-	cmd := exec.Command("ssh", args...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -74,6 +85,9 @@ func Open(alias, controlPath string, hostOpts []string) (*Client, error) {
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, classifyOpenError(alias, err, stderr.String())
 	}
 	return &Client{cmd: cmd, sftp: sc, in: stdin, out: stdout, stderr: &stderr}, nil
@@ -109,12 +123,14 @@ func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
-	if c.sftp != nil {
-		_ = c.sftp.Close()
-	}
-	if c.cmd != nil && c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
-	}
+	c.closeOnce.Do(func() {
+		if c.sftp != nil {
+			_ = c.sftp.Close()
+		}
+		if c.cmd != nil && c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+			_ = c.cmd.Wait()
+		}
+	})
 	return nil
 }

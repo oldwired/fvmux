@@ -18,7 +18,7 @@ import (
 // every saved Snapshot. Loading a snapshot from a newer version is
 // best-effort (unknown fields are ignored); the app layer warns on a
 // forward version. No migration is performed — fvmux is pre-alpha.
-const SnapshotVersion = 1
+const SnapshotVersion = 2
 
 type Snapshot struct {
 	Version int               `toml:"version"`
@@ -26,11 +26,6 @@ type Snapshot struct {
 	Created time.Time         `toml:"created"`
 	Active  int               `toml:"active"`
 	Windows []*WindowSnapshot `toml:"window"`
-
-	// SFTPAliases lists every SFTP browser open at save time, keyed by
-	// SSH host alias. On Load the runtime queues a re-open for each;
-	// see internal/app/session.go for the polling auth-aware retry.
-	SFTPAliases []string `toml:"sftp_aliases,omitempty"`
 
 	MetaPath string `toml:"-"`
 }
@@ -42,6 +37,7 @@ type Snapshot struct {
 // so a zero value restores the old default: FocusIndex 0 = first leaf,
 // Zoomed 0 = not zoomed (a zoomed pane is stored 1-based).
 type WindowSnapshot struct {
+	Kind       string   `toml:"kind"` // "terminal" or "files".
 	ID         uint64   `toml:"id"`
 	Number     int      `toml:"number"`
 	Title      string   `toml:"title"`      // profile-derived fallback caption.
@@ -51,6 +47,10 @@ type WindowSnapshot struct {
 	FocusIndex int      `toml:"focus_index"` // 0-based focused-leaf index.
 	Zoomed     int      `toml:"zoomed"`      // 0 = none; otherwise 1-based leaf index.
 	SyncInput  bool     `toml:"sync_input"`  // broadcast-typing mode.
+	Alias      string   `toml:"alias,omitempty"`
+	RemoteCWD  string   `toml:"remote_cwd,omitempty"`
+	LocalCWD   string   `toml:"local_cwd,omitempty"`
+	FocusSide  string   `toml:"focus_side,omitempty"`
 }
 
 // RectTOML is geom.Rect spelt with explicit x/y/w/h keys for clarity

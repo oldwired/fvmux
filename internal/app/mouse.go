@@ -68,7 +68,11 @@ func (m *Mux) registerWindow(w *views.Window, ws *windowState) {
 	// the drag ends; rerender there to resync the hit-map and re-apply the
 	// ratio-based split positions, matching the keyboard-resize path.
 	w.OnResize = func(geom.Point) { m.rerender(ws) }
+	previous := m.App.Desktop.Current()
 	m.App.Desktop.InsertWindow(w)
+	if m.workspaceWindowExists(previous) {
+		m.lastFocused = previous
+	}
 	m.raiseMouseListener()
 }
 
@@ -171,6 +175,10 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 
 	ws := m.windowAtPoint(ev.Where)
 	if ws == nil {
+		if fw := m.fileWindowAtPoint(ev.Where); fw != nil {
+			m.focusWindowView(fw.Frame.Self())
+			return false
+		}
 		if debug.Mouse() {
 			debug.Logf("mouse", "handleMouseDown: no fvmux window under cursor, falling through")
 		}
@@ -188,6 +196,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 
 	switch {
 	case ev.Buttons&consts.MbLeftButton != 0:
+		m.focusWindowView(ws.Frame.Self())
 		if leaf != ws.Focus && leaf.Pane != nil {
 			m.setPaneFocus(ws, leaf)
 		}
@@ -200,9 +209,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		// so focus the clicked window explicitly — the context-menu
 		// actions dispatch against the *current* window and would
 		// otherwise target the occluded one beneath.
-		if m.currentWindow() != ws {
-			m.App.Desktop.Focus(ws.Frame.Self())
-		}
+		m.focusWindowView(ws.Frame.Self())
 		// Bring focus to the right-clicked pane before showing the menu.
 		if leaf != ws.Focus && leaf.Pane != nil {
 			m.setPaneFocus(ws, leaf)
@@ -214,6 +221,26 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		debug.Logf("mouse", "handleMouseDown: unhandled buttons=%#02x", ev.Buttons)
 	}
 	return false
+}
+
+func (m *Mux) fileWindowAtPoint(p geom.Point) *fileWindowState {
+	desk := &m.App.Desktop.Group
+	for i := len(desk.Children) - 1; i >= 0; i-- {
+		c := desk.Children[i]
+		if c == views.View(m.mouseView) || c == m.App.Desktop.Background {
+			continue
+		}
+		bv := c.BaseView()
+		if bv.Size.X <= 0 || bv.Size.Y <= 0 {
+			continue
+		}
+		r := geom.NewRect(bv.Origin.X, bv.Origin.Y, bv.Origin.X+bv.Size.X, bv.Origin.Y+bv.Size.Y)
+		if !r.Contains(p) {
+			continue
+		}
+		return m.fileWindows[c]
+	}
+	return nil
 }
 
 // findLeafAtPoint returns the leaf whose cached LastRect (in desktop
@@ -252,7 +279,7 @@ func findLeafAtPoint(ws *windowState, p geom.Point) *layout.PaneNode {
 
 // windowAtPoint returns the fvmux window whose frame is topmost under
 // p, or nil when p isn't over any fvmux window — including when a
-// dialog (SFTP browser, picker) covers that spot. Click handling must
+// dialog or Files window covers that spot. Click handling must
 // target the window the user sees under the cursor, not the focused
 // window: with overlapping windows those differ, and pane actions
 // would silently hit an occluded pane in the window beneath.
@@ -292,6 +319,8 @@ var paneContextRows = []uint16{
 	commands.CmdSplitV,
 	commands.CmdZoomPane,
 	commands.CmdRenamePane,
+	commands.CmdSFTPHere,
+	commands.CmdSFTPNewHere,
 	0,
 	commands.CmdSendSIGINT,
 	commands.CmdSendSIGQUIT,
@@ -334,7 +363,7 @@ func paneContextMenuItems(reg *commands.Registry) []string {
 // (id 0) is a no-op.
 func (m *Mux) showPaneContextMenu(origin geom.Point) {
 	items := paneContextMenuItems(m.Reg)
-	idx := popupmenu.New(origin, items, 36).Run(&m.App.Desktop.Group)
+	idx := popupmenu.New(origin, items, 46).Run(&m.App.Desktop.Group)
 	if idx < 0 || idx >= len(paneContextRows) {
 		return
 	}
@@ -352,6 +381,10 @@ func (m *Mux) showPaneContextMenu(origin geom.Point) {
 		m.doZoom()
 	case commands.CmdRenamePane:
 		m.renamePane()
+	case commands.CmdSFTPHere:
+		m.openFilesHere(false)
+	case commands.CmdSFTPNewHere:
+		m.openFilesHere(true)
 	case commands.CmdSendSIGINT:
 		m.sendSIGINT()
 	case commands.CmdSendSIGQUIT:

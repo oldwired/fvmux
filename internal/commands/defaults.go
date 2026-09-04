@@ -165,14 +165,16 @@ func Defaults() *Registry {
 
 	r.Register(&Command{ID: CmdConnectHost, Category: "Connections", Name: "Connect to Host…", MenuLabel: "~C~onnect to Host…", Chord: "C-g H"})
 	r.Register(&Command{ID: CmdEditHosts, Category: "Connections", Name: "Edit hosts.toml", MenuLabel: "~E~dit hosts.toml", Chord: "C-g B"})
-	r.Register(&Command{ID: CmdActiveConnections, Category: "Connections", Name: "Active Connections…", MenuLabel: "~A~ctive Connections…"})
+	r.Register(&Command{ID: CmdActiveConnections, Category: "Connections", Name: "SSH Connection Diagnostics…", MenuLabel: "SSH Connection ~D~iagnostics…"})
 	// "Validate", not "Reload": nothing caches host data (every picker
 	// re-reads from disk), so the command's real value is a parse check
 	// with a visible result — naming it "Reload" implied staleness that
 	// doesn't exist.
 	r.Register(&Command{ID: CmdReloadHosts, Category: "Connections", Name: "Validate hosts.toml", MenuLabel: "~V~alidate hosts.toml"})
 
-	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "File Browser (SFTP)…", MenuLabel: "~F~ile Browser (SFTP)…", Chord: "C-g F"})
+	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "Files Window…", MenuLabel: "~F~iles Window…", Chord: "C-g F"})
+	r.Register(&Command{ID: CmdSFTPHere, Category: "Transfer", Name: "Open Files Here", MenuLabel: "Open Files ~H~ere"})
+	r.Register(&Command{ID: CmdSFTPNewHere, Category: "Transfer", Name: "Open Another Files Window Here", MenuLabel: "Open Another Files ~W~indow Here"})
 	// F5/F6 are bidirectional inside the browser: F5 copies the highlighted
 	// entry to the other side, F6 moves/renames it. The names describe the
 	// keys, not an up/down direction. Hotkey markers stay unique within the

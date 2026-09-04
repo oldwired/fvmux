@@ -53,8 +53,8 @@ func TestManager_ParallelLimit(t *testing.T) {
 		if got := tr.Bytes(); got != 0 {
 			t.Fatalf("transfer %d moved %d bytes while the slot was held; want 0 (semaphore not gating)", i, got)
 		}
-		if s := tr.Status(); s != StatusActive {
-			t.Fatalf("transfer %d status = %d while queued; want StatusActive", i, s)
+		if s := tr.Status(); s != StatusQueued {
+			t.Fatalf("transfer %d status = %d while queued; want StatusQueued", i, s)
 		}
 	}
 

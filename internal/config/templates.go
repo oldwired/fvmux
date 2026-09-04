@@ -154,7 +154,7 @@ default_window_width  = 80
 default_window_height = 24
 
 [sftp]
-# parallel: max concurrent file transfers in the SFTP browser.
+# parallel: max concurrent file transfers in each Files window.
 parallel = 1
 `
 

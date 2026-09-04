@@ -34,7 +34,9 @@ type panel struct {
 	header *dialogs.StaticText // "Remote — /path" or "Local — /path"
 	width  int                 // header column width, for path truncation
 
-	preview *previewPane
+	preview  *previewPane
+	onCwd    func(string)
+	onActive func()
 
 	// Async remote-listing refresh coordination (remote panels only).
 	// closed and refreshWG are shared with the owning browser so its
@@ -64,7 +66,7 @@ type panel struct {
 // Enter never triggers an inline expansion; the dialog-level key handler
 // intercepts Enter first and routes it through listingEnter.
 func newPanel(
-	d *dialogs.Dialog,
+	d *views.Window,
 	isRemote bool,
 	c *pkgsftp.Client,
 	cwd string,
@@ -95,11 +97,22 @@ func newPanel(
 
 	// Tree drives listing: highlighting a folder in the tree sets
 	// that side's cwd and rebuilds the listing.
-	p.tree.OnSelect = func(n *treeview.Node) { p.onTreeSelect(n) }
-	// Listing OnSelect is intentionally NOT wired to preview. Auto-
+	p.tree.OnSelect = func(n *treeview.Node) {
+		if p.onActive != nil {
+			p.onActive()
+		}
+		p.onTreeSelect(n)
+	}
+	// Listing OnSelect records the active side but is intentionally not
+	// wired to preview. Auto-
 	// previewing on arrow-nav would re-fetch every remote file the
 	// cursor crosses — bad UX on a slow link. Enter on a file row
 	// is the explicit "open it" action; see listingEnter below.
+	p.listing.OnSelect = func(*treeview.Node) {
+		if p.onActive != nil {
+			p.onActive()
+		}
+	}
 
 	d.Insert(p.tree)
 	d.Insert(p.listing)
@@ -117,6 +130,9 @@ func (p *panel) setCwd(newCwd string) {
 	}
 	p.cwd = newCwd
 	p.refreshHeader()
+	if p.onCwd != nil {
+		p.onCwd(newCwd)
+	}
 	if p.isRemote {
 		p.requestRemoteRefresh(newCwd)
 	} else {
@@ -220,6 +236,13 @@ func (p *panel) asyncRemoteOpKey(key string, op func() error, done func(error)) 
 func (p *panel) requestRemoteRefresh(cwd string) {
 	if p.closed != nil && p.closed.Load() {
 		return
+	}
+	// Replace the previous directory immediately. Keeping stale rows under a
+	// newly updated header made it look as though they belonged to cwd and
+	// allowed actions against content from the directory just left.
+	if p.listing != nil {
+		p.listing.SetRoots([]*treeview.Node{{Label: "Loading…"}})
+		views.MarkDirty()
 	}
 	p.refMu.Lock()
 	p.refWantCwd = cwd

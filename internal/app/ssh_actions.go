@@ -18,22 +18,24 @@ func (m *Mux) showActiveConnections() {
 			"SSH pool is not initialised.", msgbox.OKOnly)
 		return
 	}
-	snap := m.sshPool.Snapshot()
+	all := m.sshPool.Snapshot()
+	snap := all[:0]
+	for _, c := range all {
+		if c.SockLive {
+			snap = append(snap, c)
+		}
+	}
 	if len(snap) == 0 {
 		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-			"No active SSH connections. Open one with Ctrl-G H.", msgbox.OKOnly)
+			"No live shared SSH connections.", msgbox.OKOnly)
 		return
 	}
 	var sb strings.Builder
-	sb.WriteString("Tracked aliases:\n\n")
+	sb.WriteString("Live shared SSH connections:\n\n")
 	for _, c := range snap {
 		age := time.Since(c.Started).Truncate(time.Second)
-		state := "dormant"
-		if c.SockLive {
-			state = "master up"
-		}
-		fmt.Fprintf(&sb, "• %s — %d ref%s — first used %s ago — %s\n",
-			c.Alias, c.Refs, pluralS(c.Refs), age, state)
+		fmt.Fprintf(&sb, "• [%s] — %d terminal/file user%s — connected %s ago\n",
+			c.Alias, c.Refs, pluralS(c.Refs), age)
 	}
 	msgbox.Show(&m.App.Desktop.Group, msgbox.Info, sb.String(), msgbox.OKOnly)
 }

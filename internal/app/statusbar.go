@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
@@ -40,6 +41,10 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 			out.FocusedCWD = curWS.Focus.Pane.CWD
 		}
 	}
+	if fw := m.currentFileWindow(); fw != nil {
+		out.FocusedTitle = fmt.Sprintf("[%s] files · %s", fw.Alias, fw.stateLabel())
+		out.FocusedCWD = emptyAs(fw.RemoteCWD, "remote home")
+	}
 	// Ctrl-G q flash takes over the focused-title slot temporarily.
 	if !m.flashUntil.IsZero() && time.Now().Before(m.flashUntil) {
 		out.FocusedTitle = m.flashText
@@ -49,10 +54,14 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 	for _, key := range m.windowOrder {
 		ws := m.windows[key]
 		if ws == nil {
+			if fw := m.fileWindows[key]; fw != nil {
+				out.Windows = append(out.Windows, statusbar.WindowEntry{
+					Number: fw.Number, Title: fmt.Sprintf("[%s] files · %s", fw.Alias, fw.stateLabel()), Focused: key == curView,
+				})
+			}
 			continue
 		}
-		title := ws.displayTitle()
-		title = whimsy.HomeGlyphFor(title) + title
+		title := whimsy.HomeGlyphFor(ws.displayTitle()) + ws.displayTitle()
 		entry := statusbar.WindowEntry{
 			Number:  ws.Number,
 			Title:   title,

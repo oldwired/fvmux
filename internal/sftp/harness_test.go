@@ -53,14 +53,14 @@ func newTestClient(t *testing.T) *pkgsftp.Client {
 	return client
 }
 
-// waitTransfer blocks until t leaves StatusActive or the deadline passes,
+// waitTransfer blocks until t leaves the queued/running states or the deadline passes,
 // then returns the terminal status. Drives the Manager.Start goroutine to
 // completion in tests without sleeping on a fixed duration.
 func waitTransfer(t *testing.T, tr *Transfer) int32 {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if s := tr.Status(); s != StatusActive {
+		if s := tr.Status(); !IsActiveStatus(s) {
 			return s
 		}
 		time.Sleep(2 * time.Millisecond)

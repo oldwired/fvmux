@@ -7,7 +7,6 @@ import (
 
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/consts"
-	"github.com/oldwired/fv-go/pkg/fv/dialogs"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
@@ -17,7 +16,7 @@ import (
 )
 
 // keyHandler is an invisible OfPreProcess view installed inside the
-// browser dialog. It intercepts:
+// Files window. It intercepts:
 //
 //   - Enter   — when focus is in a listing, dive into a folder /
 //     parent row. The listing's TreeView would otherwise
@@ -33,15 +32,16 @@ import (
 //
 // Tab cycling between the four selectable views (remote tree, remote
 // listing, local tree, local listing) is handled by fv-go's standard
-// dialog focus rotation; this handler doesn't touch Tab.
+// group focus rotation; this handler doesn't touch Tab.
 type keyHandler struct {
 	views.Base
 
-	app    *fvapp.Application
-	mgr    *Manager
-	remote *panel
-	local  *panel
-	dlg    *dialogs.Dialog // set by Show after construction.
+	app        *fvapp.Application
+	mgr        *Manager
+	remote     *panel
+	local      *panel
+	window     *views.Window
+	onTerminal func()
 }
 
 func newKeyHandler(a *fvapp.Application, mgr *Manager, remote, local *panel) *keyHandler {
@@ -78,11 +78,16 @@ func (h *keyHandler) HandleEvent(ev *drivers.Event) {
 		case cmSftpRefresh:
 			h.refreshBoth()
 			ev.What = consts.EvNothing
+		case cmSftpTerminal:
+			if h.onTerminal != nil {
+				h.onTerminal()
+			}
+			ev.What = consts.EvNothing
 		case consts.CmCancel:
 			// Dialog's own EndModal is a no-op for non-modal — close
 			// the dialog ourselves. OnClose then runs the teardown.
-			if h.dlg != nil {
-				h.dlg.Close()
+			if h.window != nil {
+				h.window.Close()
 				ev.What = consts.EvNothing
 			}
 		}
@@ -92,6 +97,11 @@ func (h *keyHandler) HandleEvent(ev *drivers.Event) {
 		return
 	}
 	switch ev.KeyCode {
+	case consts.KbEsc:
+		if h.window != nil {
+			h.window.Close()
+			ev.What = consts.EvNothing
+		}
 	case consts.KbEnter:
 		// Enter on a listing row: cd into folder, preview a file.
 		// Trees use Enter for expand/collapse via TreeView's own

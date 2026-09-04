@@ -24,8 +24,7 @@ func Build(bounds geom.Rect, reg *commands.Registry) *fvmenus.MenuBar {
 }
 
 // BuildWithExtras assembles the full menu bar with dynamic submenus
-// (Theme, New from Profile, Open Session, Active Connections, Active
-// Transfers) sourced from extras. Each menu is constructed by hand so
+// (currently active transfers) sourced from extras. Each menu is constructed by hand so
 // layout (order, separators, submenus) is explicit and inspectable.
 func BuildWithExtras(bounds geom.Rect, reg *commands.Registry, extras Extras) *fvmenus.MenuBar {
 	bar := fvmenus.NewMenu(
@@ -34,7 +33,7 @@ func BuildWithExtras(bounds geom.Rect, reg *commands.Registry, extras Extras) *f
 		&fvmenus.Item{Name: "~V~iew", Sub: viewMenu(reg, extras)},
 		&fvmenus.Item{Name: "~P~ane", Sub: paneMenu(reg)},
 		&fvmenus.Item{Name: "~W~indow", Sub: windowMenu(reg)},
-		&fvmenus.Item{Name: "~C~onnections", Sub: connectionsMenu(reg, extras)},
+		&fvmenus.Item{Name: "~C~onnections", Sub: connectionsMenu(reg)},
 		&fvmenus.Item{Name: "~T~ransfer", Sub: transferMenu(reg, extras)},
 		&fvmenus.Item{Name: "~H~elp", Sub: helpMenu(reg)},
 	)
@@ -174,14 +173,11 @@ func windowMenu(reg *commands.Registry) *fvmenus.Menu {
 	)
 }
 
-func connectionsMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
+func connectionsMenu(reg *commands.Registry) *fvmenus.Menu {
 	items := []*fvmenus.Item{
 		item(reg, commands.CmdConnectHost),
 		sep(),
 		item(reg, commands.CmdActiveConnections),
-	}
-	if len(extras.Connections) > 0 {
-		items = append(items, subItems("Active ~M~asters", itemsFromExtras(extras.Connections)))
 	}
 	items = append(items,
 		sep(),
@@ -194,6 +190,8 @@ func connectionsMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 func transferMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 	items := []*fvmenus.Item{
 		item(reg, commands.CmdSFTPBrowser),
+		item(reg, commands.CmdSFTPHere),
+		item(reg, commands.CmdSFTPNewHere),
 		sep(),
 		item(reg, commands.CmdUploadFile),
 		item(reg, commands.CmdDownloadFile),

@@ -13,14 +13,14 @@ import (
 func (m *Mux) flashNumbers() {
 	var sb strings.Builder
 	for i, key := range m.windowOrder {
-		ws := m.windows[key]
-		if ws == nil {
+		num, title := m.workspaceWindowNumber(key), m.workspaceWindowTitle(key)
+		if num == 0 {
 			continue
 		}
 		if i > 0 {
 			sb.WriteString("  ")
 		}
-		fmt.Fprintf(&sb, "[%d] %s", ws.Number, ws.displayTitle())
+		fmt.Fprintf(&sb, "[%d] %s", num, title)
 	}
 	if sb.Len() == 0 {
 		return

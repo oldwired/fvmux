@@ -14,8 +14,7 @@ import (
 // No-op if none matches.
 func (m *Mux) focusWindowByNumber(n int) {
 	for _, key := range m.windowOrder {
-		ws := m.windows[key]
-		if ws != nil && ws.Number == n {
+		if m.workspaceWindowNumber(key) == n {
 			m.focusWindowView(key)
 			return
 		}
@@ -29,7 +28,7 @@ func (m *Mux) lastWindow() {
 	if m.lastFocused == nil {
 		return
 	}
-	if _, ok := m.windows[m.lastFocused]; !ok {
+	if !m.workspaceWindowExists(m.lastFocused) {
 		m.lastFocused = nil
 		return
 	}
@@ -73,11 +72,11 @@ func (m *Mux) showWindowList() {
 	items := make([]string, 0, len(m.windowOrder))
 	keys := make([]views.View, 0, len(m.windowOrder))
 	for _, key := range m.windowOrder {
-		ws := m.windows[key]
-		if ws == nil {
+		num, title := m.workspaceWindowNumber(key), m.workspaceWindowTitle(key)
+		if num == 0 {
 			continue
 		}
-		items = append(items, fmt.Sprintf("%d: %s", ws.Number, ws.displayTitle()))
+		items = append(items, fmt.Sprintf("%d: %s", num, title))
 		keys = append(keys, key)
 	}
 	desk := m.App.Desktop.BaseView()

@@ -1,10 +1,11 @@
-// Transfer queue for the SFTP browser. Uploads + downloads run as
+// Transfer queue for the Files window. Uploads + downloads run as
 // goroutines updating an atomic byte counter; the UI tick rebuilds a
 // fv-go taskprogress widget from a snapshot under lock, so the goroutine
 // and the renderer never share mutable widget state.
 package sftp
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -55,7 +56,7 @@ type Transfer struct {
 	StartedAt  time.Time
 
 	bytes  atomic.Int64 // copied so far.
-	status atomic.Int32 // StatusActive/Done/Failed/Cancelled.
+	status atomic.Int32 // StatusQueued/Running/Done/Failed/Cancelled.
 	errMsg atomic.Pointer[string]
 
 	cancel     chan struct{}
@@ -99,11 +100,37 @@ func (t *Transfer) cancelled() bool {
 
 // Status values, stored as int32 in Transfer.status.
 const (
-	StatusActive int32 = iota
+	StatusRunning int32 = iota
+	StatusQueued
 	StatusDone
 	StatusFailed
 	StatusCancelled
+	// StatusActive is retained for callers that only need the historical
+	// running state. New code should use IsActiveStatus when queued work
+	// counts too.
+	StatusActive = StatusRunning
 )
+
+func IsActiveStatus(status int32) bool {
+	return status == StatusQueued || status == StatusRunning
+}
+
+func StatusName(status int32) string {
+	switch status {
+	case StatusQueued:
+		return "queued"
+	case StatusRunning:
+		return "running"
+	case StatusDone:
+		return "done"
+	case StatusFailed:
+		return "failed"
+	case StatusCancelled:
+		return "cancelled"
+	default:
+		return "unknown"
+	}
+}
 
 // Bytes copied so far.
 func (t *Transfer) Bytes() int64 { return t.bytes.Load() }
@@ -119,14 +146,11 @@ func (t *Transfer) Error() string {
 	return ""
 }
 
-// Manager owns all in-flight + recent SFTP transfers. Alias is the
-// SSH host this browser is bound to — read by session-snapshot save
-// so reopening the session restores the right browsers. closeFn,
-// when set, closes the browser dialog that owns this manager (used
-// by CloseAllBrowsers).
+// Manager owns all in-flight + recent SFTP transfers. Alias is the SSH host
+// the owning Files window is bound to and is included in every visible task.
 type Manager struct {
-	Alias   string
-	closeFn func()
+	Alias    string
+	lifetime context.Context
 
 	// openDedicated, when set, opens a fresh SFTP session (its own ssh
 	// subprocess over the alias's ControlMaster) for a single-file
@@ -149,6 +173,7 @@ type Manager struct {
 	// is insufficient: a second F5 could otherwise re-enqueue files that the
 	// first folder copy had already completed while later files were pending.
 	treeClaims map[string]struct{}
+	scans      map[string]time.Time
 	wg         sync.WaitGroup // tracks live run + abort-watcher goroutines.
 }
 
@@ -162,7 +187,7 @@ type dedicatedConn interface {
 }
 
 // NewManager returns an empty transfer manager bound to alias.
-func NewManager(alias string) *Manager { return &Manager{Alias: alias} }
+func NewManager(alias string) *Manager { return &Manager{Alias: alias, lifetime: context.Background()} }
 
 // SetParallel bounds how many file payloads move concurrently on this
 // manager. config.SFTP.Parallel feeds it (default 1); the browser calls
@@ -182,13 +207,25 @@ func (m *Manager) SetParallel(n int) {
 // browser calls this after constructing the manager; tests inject
 // their own opener instead.
 func (m *Manager) EnableDedicatedTransfers(controlPath string, hostOpts []string) {
+	m.EnableDedicatedTransfersContext(context.Background(), controlPath, hostOpts)
+}
+
+func (m *Manager) EnableDedicatedTransfersContext(ctx context.Context, controlPath string, hostOpts []string) {
+	m.lifetime = ctx
 	m.openDedicated = func() (dedicatedConn, error) {
-		c, err := Open(m.Alias, controlPath, hostOpts)
+		c, err := OpenContext(ctx, m.Alias, controlPath, hostOpts)
 		if err != nil {
 			return nil, err
 		}
 		return c, nil
 	}
+}
+
+func (m *Manager) contextErr() error {
+	if m.lifetime == nil {
+		return nil
+	}
+	return m.lifetime.Err()
 }
 
 // Wait blocks until every started transfer goroutine has finished. The
@@ -197,10 +234,6 @@ func (m *Manager) EnableDedicatedTransfers(controlPath string, hostOpts []string
 // with Close — draining first guarantees no transfer is mid-Read/Write
 // when the client tears down.
 func (m *Manager) Wait() { m.wg.Wait() }
-
-// SetCloseFn lets the browser register its close action against the
-// manager so CloseAllBrowsers can dismiss it.
-func (m *Manager) SetCloseFn(fn func()) { m.closeFn = fn }
 
 // Start enqueues an upload or download against c and kicks off the
 // goroutine. The returned Transfer is the manager's tracking entry —
@@ -247,9 +280,10 @@ func (m *Manager) enqueue(c *pkgsftp.Client, dir Direction, localPath, remotePat
 		destinationKey: destKey,
 		partPath:       uniquePartPath(destPath),
 	}
+	t.status.Store(StatusQueued)
 	m.mu.Lock()
 	for _, existing := range m.list {
-		if existing.Status() == StatusActive && existing.destinationKey == destKey {
+		if IsActiveStatus(existing.Status()) && existing.destinationKey == destKey {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("%w: %s", ErrDestinationBusy, destPath)
 		}
@@ -317,6 +351,9 @@ func (m *Manager) StartDedicated(shared *pkgsftp.Client, dir Direction, localPat
 		return m.enqueue(shared, dir, localPath, remotePath, removeSource)
 	}
 	dc, err := m.openDedicated()
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
 	if err != nil || dc == nil {
 		return m.enqueue(shared, dir, localPath, remotePath, removeSource)
 	}
@@ -353,7 +390,7 @@ func (m *Manager) CancelLast() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := len(m.list) - 1; i >= 0; i-- {
-		if m.list[i].Status() == StatusActive {
+		if IsActiveStatus(m.list[i].Status()) {
 			m.list[i].requestCancel()
 			return true
 		}
@@ -367,7 +404,7 @@ func (m *Manager) CancelAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, t := range m.list {
-		if t.Status() == StatusActive {
+		if IsActiveStatus(t.Status()) {
 			t.requestCancel()
 		}
 	}
@@ -381,7 +418,7 @@ func (m *Manager) ClearCompleted() int {
 	kept := m.list[:0]
 	dropped := 0
 	for _, t := range m.list {
-		if t.Status() == StatusActive {
+		if IsActiveStatus(t.Status()) {
 			kept = append(kept, t)
 		} else {
 			dropped++
@@ -401,6 +438,42 @@ func (m *Manager) Snapshot() []*Transfer {
 	return out
 }
 
+// ActiveCount includes queued/running copies and recursive directory scans.
+// It is used by close-request confirmation, where either kind of work would
+// otherwise be cancelled without warning.
+func (m *Manager) ActiveCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := len(m.scans)
+	for _, t := range m.list {
+		if IsActiveStatus(t.Status()) {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *Manager) HasScanning() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.scans) > 0
+}
+
+func (m *Manager) beginScan(label string) {
+	m.mu.Lock()
+	if m.scans == nil {
+		m.scans = make(map[string]time.Time)
+	}
+	m.scans[label] = time.Now()
+	m.mu.Unlock()
+}
+
+func (m *Manager) endScan(label string) {
+	m.mu.Lock()
+	delete(m.scans, label)
+	m.mu.Unlock()
+}
+
 // SyncWidget rebuilds tp.Tasks from the current snapshot. Callers run
 // this on the UI tick so the goroutine and the renderer never touch
 // the same Task struct concurrently.
@@ -410,8 +483,16 @@ func (m *Manager) SyncWidget(tp *taskprogress.TaskProgress) {
 	}
 	snap := m.Snapshot()
 	tp.Tasks = tp.Tasks[:0]
+	m.mu.Lock()
+	for label, started := range m.scans {
+		tp.Tasks = append(tp.Tasks, &taskprogress.Task{
+			Caption: "Scanning [" + m.Alias + "] " + label,
+			Min:     0, Max: 1, Value: 0, StartedAt: started,
+		})
+	}
+	m.mu.Unlock()
 	for _, t := range snap {
-		caption := captionFor(t)
+		caption := "[" + m.Alias + "] " + captionFor(t)
 		// taskprogress fields are int; halve both Max and Value until Max
 		// fits int32 so a >2 GiB transfer can't overflow to a negative bar
 		// on 32-bit builds. Display-only — the copy loop uses int64.
@@ -445,19 +526,21 @@ func captionFor(t *Transfer) string {
 	if t.Direction == Download {
 		arrow = "⇓"
 	}
-	short := filepath.Base(t.LocalPath)
+	route := t.LocalPath + " → " + t.RemotePath
 	if t.Direction == Download {
-		short = filepath.Base(t.RemotePath)
+		route = t.RemotePath + " → " + t.LocalPath
 	}
 	switch t.Status() {
 	case StatusFailed:
-		return fmt.Sprintf("✗ %s %s — %s", arrow, short, t.Error())
+		return fmt.Sprintf("✗ [failed] %s %s — %s", arrow, route, t.Error())
 	case StatusCancelled:
-		return fmt.Sprintf("⊘ %s %s — cancelled", arrow, short)
+		return fmt.Sprintf("⊘ [cancelled] %s %s", arrow, route)
 	case StatusDone:
-		return fmt.Sprintf("✓ %s %s", arrow, short)
+		return fmt.Sprintf("✓ [done] %s %s", arrow, route)
+	case StatusQueued:
+		return fmt.Sprintf("… [queued] %s %s", arrow, route)
 	}
-	return fmt.Sprintf("%s %s", arrow, short)
+	return fmt.Sprintf("↻ [running] %s %s", arrow, route)
 }
 
 func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
@@ -479,6 +562,7 @@ func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 			defer func() { <-m.sem }()
 		}
 	}
+	t.status.Store(StatusRunning)
 	err := m.copy(c, t)
 	// A move deletes the source only once the copy fully succeeded. A
 	// delete failure fails the move (copy already landed → data is safe).

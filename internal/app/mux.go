@@ -1,7 +1,7 @@
 package app
 
 import (
-	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -25,7 +25,6 @@ import (
 	"github.com/oldwired/fvmux/internal/prefix"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
-	"github.com/oldwired/fvmux/internal/sftp"
 	"github.com/oldwired/fvmux/internal/splash"
 	"github.com/oldwired/fvmux/internal/sshmgr"
 	"github.com/oldwired/fvmux/internal/statusbar"
@@ -99,7 +98,16 @@ func (m *Mux) refreshWindowTitle(ws *windowState) {
 	if ws.Focus != nil && ws.Focus.Pane != nil {
 		pt = ws.Focus.Pane.DisplayTitle()
 	}
-	ws.Frame.SetTitle(composeTitle(ws.UserTitle, ws.ShellTitle, ws.Title, pt))
+	title := composeTitle(ws.UserTitle, ws.ShellTitle, ws.Title, pt)
+	if ws.Focus != nil && ws.Focus.Pane != nil && ws.Focus.Pane.SSHAlias != "" {
+		alias := ws.Focus.Pane.SSHAlias
+		if title == "" || title == alias {
+			title = fmt.Sprintf("[%s] Terminal", alias)
+		} else {
+			title = fmt.Sprintf("[%s] Terminal — %s", alias, title)
+		}
+	}
+	ws.Frame.SetTitle(title)
 }
 
 // Options bundles everything Mux needs at construction time. Each
@@ -127,9 +135,11 @@ type Mux struct {
 	Opts Options
 
 	windows     map[views.View]*windowState
+	fileWindows map[views.View]*fileWindowState
 	windowOrder []views.View // insertion order, used by Next/Prev navigation.
 	prefix      *prefix.View
 	lastFocused views.View // for Ctrl-G Tab MRU toggle.
+	lastSSHPane map[string]*session.Pane
 
 	resizeMode bool
 	resizeView *prefix.ResizeView
@@ -167,14 +177,7 @@ type Mux struct {
 	eggMu     sync.Mutex
 	eggTimers []*time.Timer // pending easter-egg AfterFunc handles.
 
-	sftpRestore sftpRestoreTracker
-
-	// sftpConnecting holds aliases with an SFTP browser connect in flight
-	// (from openSftpBrowser's async ShowAsync). A second Ctrl-G F to the
-	// same alias while one is connecting is ignored so a dead host can't
-	// spawn a pile of duplicate connects. Touched only on the UI goroutine
-	// (openSftpBrowser and ShowAsync's onResolved both run there).
-	sftpConnecting map[string]bool
+	confirmFilesClosePrompt func(string) bool
 
 	// signalQuit is set by the OS-signal handler so OnQuitRequested skips
 	// the interactive confirm-kill prompt (a modal is impossible during
@@ -198,11 +201,13 @@ func NewMux(a *fvapp.Application, reg *commands.Registry, opts Options) *Mux {
 	// removed; live masters shared with other instances are untouched).
 	sshmgr.SweepStale(opts.Paths.ControlSocketDir())
 	m := &Mux{
-		App:     a,
-		Reg:     reg,
-		Opts:    opts,
-		windows: map[views.View]*windowState{},
-		sshPool: sshmgr.NewPool(opts.Paths.ControlSocket),
+		App:         a,
+		Reg:         reg,
+		Opts:        opts,
+		windows:     map[views.View]*windowState{},
+		fileWindows: map[views.View]*fileWindowState{},
+		lastSSHPane: map[string]*session.Pane{},
+		sshPool:     sshmgr.NewPool(opts.Paths.ControlSocket),
 	}
 	m.wireActions()
 	return m
@@ -212,6 +217,7 @@ func NewMux(a *fvapp.Application, reg *commands.Registry, opts Options) *Mux {
 // from the cmd/fvmux deferred shutdown so we don't leak orphan ssh
 // children when fvmux exits before ControlPersist expires.
 func (m *Mux) ShutdownSSHPool() {
+	m.closeAllFileWindows()
 	if m.sshPool != nil {
 		m.sshPool.Shutdown()
 	}
@@ -303,6 +309,8 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdActiveConnections, m.showActiveConnections)
 	bind(commands.CmdReloadHosts, m.reloadHosts)
 	bind(commands.CmdSFTPBrowser, m.sftpBrowser)
+	bind(commands.CmdSFTPHere, func() { m.openFilesHere(false) })
+	bind(commands.CmdSFTPNewHere, func() { m.openFilesHere(true) })
 	bind(commands.CmdUploadFile, m.transferHintUpload)
 	bind(commands.CmdDownloadFile, m.transferHintDownload)
 	bind(commands.CmdActiveTransfers, m.showActiveTransfers)
@@ -430,6 +438,15 @@ func (m *Mux) renameWindow() {
 }
 
 func (m *Mux) sftpBrowser() {
+	if leaf := focusedPane(m.currentWindow()); leaf != nil && leaf.Pane != nil && leaf.Pane.SSHAlias != "" {
+		alias := leaf.Pane.SSHAlias
+		if existing := m.filesForAlias(alias); existing != nil {
+			m.focusWindowView(existing.Frame.Self())
+			return
+		}
+		m.openFilesWindow(alias, leaf.Pane.CWD, "", "remote", nil, 0)
+		return
+	}
 	hosts, _ := sshmgr.Load(m.Opts.Paths.HostsFile())
 	if len(hosts) == 0 {
 		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
@@ -441,75 +458,11 @@ func (m *Mux) sftpBrowser() {
 	if h == nil {
 		return
 	}
-	m.openSftpBrowser(h.Alias)
-}
-
-// openSftpBrowser is the connect-then-show flow. Splits out from
-// sftpBrowser so the auth-retry path (auth failed → SSH pane warms
-// the master → retry SFTP) can call back into it without re-running
-// the host picker.
-func (m *Mux) openSftpBrowser(alias string) {
-	// Dedup: ignore a second Ctrl-G F to the same alias while its connect
-	// is still in flight, so a dead host can't accumulate duplicate ssh
-	// connects. Cleared in the onResolved callback below (success or
-	// failure). Multiple browsers to the same alias are still allowed once
-	// connected — the guard only covers the connecting window.
-	if !m.beginSftpConnect(alias) {
+	if existing := m.filesForAlias(h.Alias); existing != nil {
+		m.focusWindowView(existing.Frame.Self())
 		return
 	}
-
-	// Pool registers the alias and returns the ControlPath every
-	// subsequent ssh through this alias will share. The first
-	// connection establishes the master via its own PTY (so
-	// auth prompts appear in the pane); pool spawns no processes.
-	//
-	// ShowAsync connects off the UI goroutine and returns immediately;
-	// the pool Release is threaded through onClose (fires exactly once —
-	// on browser close for success, immediately on connect failure), so
-	// we must never Release here ourselves.
-	sock := m.sshPool.Acquire(alias)
-	host := m.hostByAlias(alias)
-	// Non-modal status-bar feedback so the user knows the connect started
-	// even when the host is slow to answer (there's no dialog yet). The
-	// generous window is cosmetic — onResolved clears it either way.
-	m.setFlash("SFTP "+alias+": connecting…", 60*time.Second, flashPrioNumbers)
-	sftp.ShowAsync(m.App, alias, sock, host.ConnectOpts(), m.Opts.Config.SFTP.Parallel,
-		func() { m.sshPool.Release(alias) },
-		func(err error) {
-			m.endSftpConnect(alias)
-			m.setFlash("", 0, flashPrioNumbers) // clear the connecting flash.
-			if err == nil {
-				return // browser is on the desktop; that's the feedback.
-			}
-			if errors.Is(err, sftp.ErrAuthRequired) {
-				m.offerAuthThenRetry(alias)
-				return
-			}
-			msgbox.Showf(&m.App.Desktop.Group, msgbox.Error,
-				"Couldn't open SFTP to %s:\n%s", []any{alias, err.Error()},
-				msgbox.OKOnly)
-		})
-}
-
-// beginSftpConnect marks alias as having an SFTP connect in flight and
-// reports whether the caller should proceed. Returns false when a connect
-// to the same alias is already running, so a repeated Ctrl-G F can't spawn
-// duplicate connects to a slow or dead host. UI-goroutine only (no mutex).
-func (m *Mux) beginSftpConnect(alias string) bool {
-	if m.sftpConnecting == nil {
-		m.sftpConnecting = map[string]bool{}
-	}
-	if m.sftpConnecting[alias] {
-		return false
-	}
-	m.sftpConnecting[alias] = true
-	return true
-}
-
-// endSftpConnect clears alias's in-flight mark once its connect resolves
-// (either the browser opened or the connect failed). UI-goroutine only.
-func (m *Mux) endSftpConnect(alias string) {
-	delete(m.sftpConnecting, alias)
+	m.openFilesWindow(h.Alias, "", "", "remote", nil, 0)
 }
 
 func (m *Mux) connectHost() {
@@ -1010,6 +963,11 @@ func (m *Mux) windowNumberInUse(n int) bool {
 			return true
 		}
 	}
+	for _, fw := range m.fileWindows {
+		if fw != nil && fw.Number == n {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1195,12 +1153,12 @@ func (m *Mux) cycleWindow(direction int) {
 
 // activeWindowKey returns the windowOrder key for the most recently
 // focused fvmux window. Walks back through Desktop.Children when
-// Current() is a dialog (SFTP browser, msgbox), so the snapshot
+// Current() is a modal dialog (for example a msgbox), so the snapshot
 // captures the window the user was actually working in rather than
 // the popup that happens to be on top. nil ⇒ no windows.
 func (m *Mux) activeWindowKey() views.View {
 	if cur := m.App.Desktop.Current(); cur != nil {
-		if _, ok := m.windows[cur]; ok {
+		if m.workspaceWindowExists(cur) {
 			return cur
 		}
 	}
@@ -1208,12 +1166,12 @@ func (m *Mux) activeWindowKey() views.View {
 	// listener).
 	children := m.App.Desktop.Children
 	for i := len(children) - 1; i >= 0; i-- {
-		if _, ok := m.windows[children[i]]; ok {
+		if m.workspaceWindowExists(children[i]) {
 			return children[i]
 		}
 	}
 	if m.lastFocused != nil {
-		if _, ok := m.windows[m.lastFocused]; ok {
+		if m.workspaceWindowExists(m.lastFocused) {
 			return m.lastFocused
 		}
 	}
@@ -1234,7 +1192,7 @@ func (m *Mux) focusWindowView(target views.View) {
 	if cur == target {
 		return
 	}
-	if _, ok := m.windows[cur]; ok {
+	if m.workspaceWindowExists(cur) {
 		m.lastFocused = cur
 	}
 	m.App.Desktop.Focus(target)
@@ -1242,6 +1200,10 @@ func (m *Mux) focusWindowView(target views.View) {
 }
 
 func (m *Mux) killWindow() {
+	if fw := m.currentFileWindow(); fw != nil {
+		fw.Frame.Close()
+		return
+	}
 	ws := m.currentWindow()
 	if ws == nil {
 		return
@@ -1257,6 +1219,19 @@ func (m *Mux) killWindow() {
 // When ConfirmKill is set and at least one window has a live pane, the
 // user is asked first.
 func (m *Mux) CanQuit() bool {
+	activeTransfers := 0
+	for _, fw := range m.fileWindows {
+		if fw != nil && fw.Browser != nil {
+			activeTransfers += fw.Browser.ActiveOperations()
+		}
+	}
+	if activeTransfers > 0 {
+		body := fmt.Sprintf("Quit and cancel %d active file operation(s)?", activeTransfers)
+		if m.confirmFilesClosePrompt != nil {
+			return m.confirmFilesClosePrompt(body)
+		}
+		return msgbox.Show(&m.App.Desktop.Group, msgbox.Question, body, msgbox.YesNo) == consts.CmYes
+	}
 	if !m.anyLivePanes() {
 		return true
 	}
@@ -1312,6 +1287,9 @@ func (m *Mux) stopPane(pane *session.Pane) {
 	// — release exactly once (stopPane can run twice for the same pane:
 	// doClose stops it, then cleanupWindow's leaf walk sees it again).
 	if pane.SSHAlias != "" && m.sshPool != nil {
+		if m.lastSSHPane[pane.SSHAlias] == pane {
+			delete(m.lastSSHPane, pane.SSHAlias)
+		}
 		m.sshPool.Release(pane.SSHAlias)
 		pane.SSHAlias = ""
 	}
@@ -1353,12 +1331,7 @@ func (m *Mux) cleanupWindow(ws *windowState) {
 	}
 	key := ws.Frame.Self()
 	delete(m.windows, key)
-	for i, k := range m.windowOrder {
-		if k == key {
-			m.windowOrder = append(m.windowOrder[:i], m.windowOrder[i+1:]...)
-			break
-		}
-	}
+	m.removeWindowOrderKey(key)
 	if m.lastFocused == key {
 		m.lastFocused = nil
 	}

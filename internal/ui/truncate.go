@@ -1,5 +1,5 @@
 // Package ui holds small presentation helpers shared across fvmux's UI
-// surfaces (status bar, SFTP browser, dialogs). They exist so the same
+// surfaces (status bar, Files window, dialogs). They exist so the same
 // width-safe truncation and modal-prompt logic isn't re-derived — and
 // re-broken — in each package.
 package ui

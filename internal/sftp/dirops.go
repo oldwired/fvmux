@@ -1,4 +1,4 @@
-// Recursive directory operations for the SFTP browser. The single-file
+// Recursive directory operations for the Files window. The single-file
 // transfer engine in transfers.go copies one (local,remote) pair; these
 // helpers fan a directory tree out into one per-file transfer each, after
 // recreating the directory skeleton on the destination side. Per-file
@@ -8,6 +8,7 @@
 package sftp
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -51,11 +52,20 @@ func (m *Manager) StartTreeMove(c *pkgsftp.Client, dir Direction, localRoot, rem
 }
 
 func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteRoot string, removeSourceTree func() error) (int, error) {
+	if err := m.contextErr(); err != nil {
+		return 0, err
+	}
 	destinationKey, destinationPath := transferDestination(dir, localRoot, remoteRoot)
 	treeKey := "tree\x00" + destinationKey
 	if !m.claimTreeDestination(treeKey) {
 		return 0, fmt.Errorf("%w: %s", ErrDestinationBusy, destinationPath)
 	}
+	scanLabel := localRoot + " → " + remoteRoot
+	if dir == Download {
+		scanLabel = remoteRoot + " → " + localRoot
+	}
+	m.beginScan(scanLabel)
+	defer m.endScan(scanLabel)
 	claimHandedOff := false
 	defer func() {
 		if !claimHandedOff {
@@ -76,10 +86,16 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 	var walkErr error
 	switch dir {
 	case Upload:
+		if err := m.contextErr(); err != nil {
+			return 0, err
+		}
 		if err := c.MkdirAll(remoteRoot); err != nil {
 			return 0, err
 		}
 		walkErr = filepath.WalkDir(localRoot, func(path string, d fs.DirEntry, err error) error {
+			if cancelErr := m.contextErr(); cancelErr != nil {
+				return cancelErr
+			}
 			if err != nil {
 				return err
 			}
@@ -100,7 +116,7 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 		if err := os.MkdirAll(localRoot, 0o755); err != nil {
 			return 0, err
 		}
-		walkErr = walkRemote(c, remoteRoot, func(remotePath string, isDir bool) error {
+		walkErr = walkRemote(m.lifetime, c, remoteRoot, func(remotePath string, isDir bool) error {
 			rel := strings.TrimPrefix(strings.TrimPrefix(remotePath, remoteRoot), "/")
 			localPath := filepath.Join(localRoot, filepath.FromSlash(rel))
 			if isDir {
@@ -145,18 +161,28 @@ func (m *Manager) finishTree(transfers []*Transfer, removeSourceTree func() erro
 // every entry (directories before their contents) so callers can create
 // the destination directory before the files that land inside it. A
 // ReadDir error aborts the walk and propagates.
-func walkRemote(c *pkgsftp.Client, root string, fn func(path string, isDir bool) error) error {
+func walkRemote(ctx context.Context, c *pkgsftp.Client, root string, fn func(path string, isDir bool) error) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
 	entries, err := c.ReadDir(root)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		path := joinRemote(root, e.Name())
 		if e.IsDir() {
 			if err := fn(path, true); err != nil {
 				return err
 			}
-			if err := walkRemote(c, path, fn); err != nil {
+			if err := walkRemote(ctx, c, path, fn); err != nil {
 				return err
 			}
 			continue

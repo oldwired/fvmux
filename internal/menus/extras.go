@@ -20,8 +20,7 @@ type ExtrasItem struct {
 // their fuzzy pickers (Ctrl-G T, Ctrl-G C, Ctrl-G s) are the single
 // source of truth for selection.
 type Extras struct {
-	Connections []ExtrasItem // Connections → Active Connections
-	Transfers   []ExtrasItem // Transfer → Active Transfers
+	Transfers []ExtrasItem // Transfer → Active Transfers
 }
 
 // itemsFromExtras converts a slice of ExtrasItem to fvmenus.Items so

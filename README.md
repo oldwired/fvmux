@@ -45,7 +45,9 @@ What's solid:
 - SSH host picker reading `~/.ssh/config` + `hosts.toml`.
 - **SSH ControlMaster pool** — second `Ctrl-G H` / `Ctrl-G F` to the
   same alias reuses the master socket (no re-auth).
-- **Dual-pane SFTP browser** — remote tree above local tree, shared
+- **First-class Files windows (SFTP)** — numbered/MRU workspace windows
+  linked to SSH terminals by a shared `[alias]` identity, with remote tree
+  above local tree, shared
   preview pane (markdown / hex / image), F5/F6 transfer queue with a
   live progress strip.
 - Real **copy mode**: arrows/PgUp/PgDn/Home/End to move a cell
@@ -278,12 +280,13 @@ Even-V, Main-H, Main-V, Tiled).
 |-------|--------|
 | `Ctrl-G H` | SSH host picker (`~/.ssh/config` + `hosts.toml`) |
 | `Ctrl-G B` | Edit `hosts.toml` |
-| `Ctrl-G F` | SFTP browser (dual-pane: remote + local) |
-| (menu) | Connections → Active Connections… (ControlMaster pool) |
+| `Ctrl-G F` | Files window for the focused SSH pane (or host picker elsewhere) |
+| (menu/context) | Open Files Here / Open Another Files Window Here |
+| (menu) | Connections → SSH Connection Diagnostics… (live masters only) |
 | (menu) | Connections → Reload hosts.toml |
 | (menu) | Transfer → Active Transfers… / Clear Completed |
 
-Inside the SFTP browser:
+Inside a Files window:
 - **Tab** switches focus between remote (top) and local (bottom) trees.
 - **F5** copies the focused listing's selection (file *or* folder,
   recursively) to the other panel's cwd.
@@ -292,7 +295,8 @@ Inside the SFTP browser:
   the copy fully succeeds).
 - **Del** cancels the most recent in-flight transfer (single files
   hard-abort immediately; folder-copy files cancel at the next chunk).
-- **Esc** closes the browser.
+- **Esc** closes the window (with confirmation when operations are active).
+- **Terminal** focuses the most recent terminal for the same `[alias]`.
 
 ### Meta
 | Chord | Action |
@@ -303,8 +307,9 @@ Inside the SFTP browser:
 | `Ctrl-G Ctrl-G` | Send a literal Ctrl-G to the focused pane |
 | (triple `Ctrl-G` within 1.5 s) | Re-run the first-run wizard |
 
-Right-click a pane for a context menu (split / zoom / rename / send
-signal / respawn / kill). Left-click a non-focused pane to focus it.
+Right-click a pane for a context menu (including **Open Files Here** on
+SSH panes, plus split / zoom / rename / send signal / respawn / kill).
+Left-click a non-focused pane to focus it.
 
 ### Command palette polish
 
@@ -438,13 +443,15 @@ session at any time.
 
 A restored session brings back each window's geometry, title, split
 layout, **which pane was focused**, **whether it was zoomed**, and
-**sync-input mode** — not just the bare tree. Open SFTP browsers are
-re-opened too (polling for the ControlMaster, auth-aware).
+**sync-input mode** — not just the bare tree. Files windows are persisted
+as full workspace members too: every instance keeps its number, geometry,
+host alias, local/remote folders, focus side, and MRU position. A restored
+connection failure remains visible in that window with retry/auth actions.
 
 The layout DSL is compact and human-readable:
 
 ```toml
-version = 1
+version = 2
 name    = "work"
 created = 2026-05-13T12:00:00Z
 active  = 1
@@ -521,30 +528,39 @@ patched to the chosen name, then drops you in the editor.
 
 **`Ctrl-G H`** opens a fuzzy picker over `~/.ssh/config` Host entries
 (including any pulled in via `Include` directives) merged with
-`hosts.toml`. Pick one → fvmux warms a ControlMaster
-(`ssh -M -N -o ControlPersist=600`) for that alias, then spawns the
-interactive session through it. Subsequent connects to the same alias
-skip re-authentication.
+`hosts.toml`. Pick one → fvmux spawns the interactive SSH session with
+`ControlMaster=auto`; that terminal performs authentication and becomes the
+shared master. Subsequent terminals and Files windows for the same alias
+reuse it and skip re-authentication.
 
-**ControlMaster pool** state is visible via Connections → Active
-Connections… (alias, ref count, uptime). Pool cleanup runs on fvmux
-exit.
+Live shared connections are visible via Connections → SSH Connection
+Diagnostics… (alias, user count, uptime). Dormant bookkeeping is omitted.
 
 ### SFTP
 
-**`Ctrl-G F`** opens a four-pane browser:
+**`Ctrl-G F`** on an SSH pane focuses an existing Files window for that
+alias, or opens one at the pane's OSC-7 remote cwd. Outside an SSH pane it
+opens the host picker. The pane context menu adds **Open Files Here**
+(reuse and navigate) and **Open Another Files Window Here** (always create).
 
-- **Upper-left tree**: remote folders, rooted at the SSH session's
-  cwd. Folders only — files are not shown in the tree.
+Files windows are ordinary numbered workspace windows: window list, number
+jumps, next/previous, MRU, arrange commands, status bar, and session restore
+all include them. Titles make the relationship explicit — for example,
+`[prod] Terminal — vim` and `[prod] Files — /srv/app` — without tying their
+lifecycles together. Closing a terminal does not close its Files windows.
+
+Each Files window has four navigation panes:
+
+- **Upper-left tree**: remote folders, initially rooted at the originating
+  SSH pane's cwd (or the remote account home). Folders only.
 - **Upper-left listing**: remote *current folder*'s contents (`../`,
   folders, files) with `Name | Size | Mtime` columns.
-- **Lower-left tree**: local folders, rooted at `$HOME`. Folders
+- **Lower-left tree**: local folders, initially rooted at `$HOME`. Folders
   only.
 - **Lower-left listing**: local *current folder*'s contents.
 - **Right**: preview pane — markdown / text / hex / image
   (PNG/JPG/GIF decoded full; SIXEL when the host terminal supports
-  it, half-block otherwise). Driven by whichever listing just
-  highlighted a file.
+  it, half-block otherwise). Loaded explicitly with Enter on a file.
 - **Bottom**: TaskProgress strip with one row per active or recent
   transfer (caption + spinner + bar + percent + ETA).
 
@@ -552,11 +568,10 @@ Navigation:
 
 - **Tree highlight** changes that side's *current folder*; the
   listing on the right of the tree rebuilds to show its contents.
-- **Listing highlight** of a file → preview updates.
 - **Enter** on a folder in a listing → that side's current folder
   changes to that subfolder.
 - **Enter** on `../` → up one folder on that side.
-- **Enter** on a file in a listing → no-op (preview is already current).
+- **Enter** on a file in a listing → load it in the preview.
 
 Key map inside the browser:
 
@@ -579,7 +594,10 @@ Key map inside the browser:
   The per-file transfers of a recursive folder copy share the browser
   session and cancel cooperatively (at the next chunk boundary, or when
   the link errors / the browser closes).
-- **Esc / Close** — dismiss the browser.
+- **Terminal** — focus the most recently used terminal for this alias (or
+  open one if none remains).
+- **Esc / Close** — dismiss the Files window. Active scans, queued copies,
+  and running copies require confirmation before they are cancelled.
 
 Transfers run as goroutines updating an atomic byte counter; the
 TaskProgress widget is rebuilt from a snapshot every 200 ms by the
@@ -589,11 +607,14 @@ renames it over the destination only on success, so a failed or
 cancelled transfer never leaves a truncated file behind and an
 existing destination survives an interrupted copy. Remote directory
 listings refresh off the UI goroutine, so a slow link can't freeze
-the rest of fvmux. Closing the browser drains in-flight transfers and
+the rest of fvmux. Navigation replaces stale remote rows with a Loading…
+state immediately. Recursive scans and queued/running/done/failed transfers
+are distinct, and rows include the alias plus full source and destination.
+Closing the window drains in-flight transfers and
 listing reads before closing the SFTP client (which is not safe to
 use concurrently with its own Close). The SFTP session itself
 piggy-backs on the alias's ControlMaster (`ssh -S socket -s alias
-sftp`) so opening the browser to a host you're already connected to
+sftp`) so opening Files to a host you're already connected to
 skips auth.
 
 The classification rules live in
@@ -695,12 +716,10 @@ Three load-bearing patterns:
    on prefix change (`Registry.RebindPrefix("C-g", "C-b")`), so menus
    and palette stay consistent.
 
-Dynamic submenus (Profiles, Sessions, Active Connections, Active
-Transfers) use a per-rebuild dispatch table over Cm codes
-`0x8000..0x8FFF` — fresh closures every menu rebuild, no stale
-references. Themes deliberately bypass the dynamic submenu path so
-View → Theme Picker (Ctrl-G T) is the single source for theme
-selection.
+The Active Transfers submenu uses a per-rebuild dispatch table over Cm
+codes `0x8000..0x8FFF` — fresh closures every menu rebuild, no stale
+references. Themes, profiles, and sessions deliberately use their fuzzy
+pickers as the single source of truth for selection.
 
 fv-go is the framework — everything fvmux draws goes through
 `pkg/fv/views` and `pkg/fv/widgets`. fvmux does not vendor or fork

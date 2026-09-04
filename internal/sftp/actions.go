@@ -1,4 +1,4 @@
-// Mutating actions for the SFTP browser following the Norton /
+// Mutating actions for the Files window following the Norton /
 // Midnight Commander convention: F6 move/rename (see move.go), F7
 // mkdir, F8 delete.
 // Each action determines the target side from focus, prompts the user

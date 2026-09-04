@@ -71,6 +71,26 @@ func TestPaneFocusRefreshesShellAndWindowTitle(t *testing.T) {
 	}
 }
 
+func TestSSHWindowTitleCarriesSharedAliasIdentity(t *testing.T) {
+	m, ws, paneA, _ := newFocusMux(t)
+	ws.Title = "prod"
+	paneA.Pane.Title = "prod"
+	paneA.Pane.SSHAlias = "prod"
+	m.setPaneFocus(ws, paneA)
+	if got := ws.Frame.Title(); got != "[prod] Terminal" {
+		t.Fatalf("SSH frame title=%q, want shared alias badge", got)
+	}
+	paneA.Pane.ShellTitle = "vim"
+	ws.ShellTitle = "vim"
+	m.refreshWindowTitle(ws)
+	if got := ws.Frame.Title(); got != "[prod] Terminal — vim" {
+		t.Fatalf("SSH activity title=%q", got)
+	}
+	if got := ws.displayTitle(); got != "[prod] terminal · vim" {
+		t.Fatalf("SSH list title=%q", got)
+	}
+}
+
 func TestTerminalCallbacksFollowPaneAcrossWindowsWithoutRewiring(t *testing.T) {
 	m, source, survivor, moved := newFocusMux(t)
 	m.wireTerminalCallbacks(moved.Pane)

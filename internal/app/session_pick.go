@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/oldwired/fvmux/internal/config"
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/session"
-	"github.com/oldwired/fvmux/internal/sftp"
 	"github.com/oldwired/fvmux/internal/ui"
 )
 
@@ -38,6 +38,9 @@ func (m *Mux) openSessionPicker() {
 		return
 	}
 	pick := names[idx]
+	if !m.canCloseAllWindows() {
+		return
+	}
 
 	// Save current session if we have one.
 	_ = m.SaveSessionSilent()
@@ -49,14 +52,9 @@ func (m *Mux) openSessionPicker() {
 			[]any{pick, err.Error()}, msgbox.OKOnly)
 		return
 	}
-	// Close existing windows + browsers before loading the new
-	// layout. Browsers are dialogs (not in windowOrder) so they need
-	// the dedicated registry sweep. Also cancel any pending SFTP
-	// restore polls so a stale one from the previous session doesn't
-	// fire after we switch. Snapshot windowOrder first since
-	// removeWindow mutates it.
-	m.sftpRestore.cancelAll()
-	sftp.CloseAllBrowsers()
+	// Close existing terminal and Files windows before loading the new
+	// workspace. Snapshot windowOrder first since removal mutates it.
+	m.closeAllFileWindows()
 	keys := append([]views.View(nil), m.windowOrder...)
 	for _, key := range keys {
 		if ws := m.windows[key]; ws != nil {
@@ -84,13 +82,9 @@ func (m *Mux) newSession() {
 	// path (quit, signal, panic, picker switch) saves; without this the
 	// layout work since the last manual save is silently discarded.
 	_ = m.SaveSessionSilent()
-	// SFTP browsers are desktop dialogs, not windows in m.windowOrder
-	// — close them via the sftp package's own registry before the
-	// window loop runs. Also cancel any pending session-restore SFTP
-	// polls so a stale one doesn't pop a browser after the user has
-	// moved on.
-	m.sftpRestore.cancelAll()
-	sftp.CloseAllBrowsers()
+	// Files windows are in windowOrder and own cancellable connection
+	// generations, so closing them also prevents late cross-session opens.
+	m.closeAllFileWindows()
 	keys := append([]views.View(nil), m.windowOrder...)
 	for _, key := range keys {
 		if ws := m.windows[key]; ws != nil {
@@ -109,6 +103,7 @@ func (m *Mux) newSession() {
 // has live panes. Returns true to proceed, false to abort.
 func (m *Mux) canCloseAllWindows() bool {
 	alive := 0
+	activeTransfers := 0
 	for _, ws := range m.windows {
 		if ws == nil || ws.Root == nil {
 			continue
@@ -119,13 +114,24 @@ func (m *Mux) canCloseAllWindows() bool {
 			}
 		})
 	}
-	if alive == 0 {
+	for _, fw := range m.fileWindows {
+		if fw != nil && fw.Browser != nil {
+			activeTransfers += fw.Browser.ActiveOperations()
+		}
+	}
+	if alive == 0 && activeTransfers == 0 {
 		return true
 	}
-	if !m.Opts.Config.General.ConfirmKill {
+	if activeTransfers == 0 && !m.Opts.Config.General.ConfirmKill {
 		return true
 	}
 	body := "Close every window and start a fresh session?"
+	if activeTransfers > 0 {
+		body = fmt.Sprintf("Close every window and cancel %d active file operation(s)?", activeTransfers)
+	}
+	if m.confirmFilesClosePrompt != nil {
+		return m.confirmFilesClosePrompt(body)
+	}
 	got := msgbox.Show(&m.App.Desktop.Group, msgbox.Question, body, msgbox.YesNo)
 	return got == consts.CmYes
 }

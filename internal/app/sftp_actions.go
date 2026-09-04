@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
@@ -26,13 +27,13 @@ func (m *Mux) transferHint(title, body string) {
 }
 
 // showActiveTransfers reports running / recent transfers across every
-// open SFTP browser. Non-modal browsers may run concurrently, so this
+// open Files window. Multiple windows may run concurrently, so this
 // walks the full set of live managers.
 func (m *Mux) showActiveTransfers() {
 	mgrs := sftp.LiveManagers()
 	if len(mgrs) == 0 {
 		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-			"No SFTP browser is open. Open one with Ctrl-G F.", msgbox.OKOnly)
+			"No Files window is open. Open one with Ctrl-G F.", msgbox.OKOnly)
 		return
 	}
 	var any bool
@@ -45,20 +46,16 @@ func (m *Mux) showActiveTransfers() {
 			if t.Direction == sftp.Download {
 				dir = "↓"
 			}
-			short := t.LocalPath
+			route := t.LocalPath + " → " + t.RemotePath
 			if t.Direction == sftp.Download {
-				short = t.RemotePath
+				route = t.RemotePath + " → " + t.LocalPath
 			}
-			state := "active"
+			state := sftp.StatusName(t.Status())
 			switch t.Status() {
-			case sftp.StatusDone:
-				state = "done"
 			case sftp.StatusFailed:
 				state = "failed: " + t.Error()
-			case sftp.StatusCancelled:
-				state = "cancelled"
 			}
-			sb.WriteString(dir + " " + short + "  — " + state + "\n")
+			fmt.Fprintf(&sb, "[%s] %s %s — %s\n", mgr.Alias, dir, route, state)
 		}
 	}
 	if !any {
@@ -75,7 +72,7 @@ func (m *Mux) clearCompletedTransfers() {
 	mgrs := sftp.LiveManagers()
 	if len(mgrs) == 0 {
 		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-			"No SFTP browser is open.", msgbox.OKOnly)
+			"No Files window is open.", msgbox.OKOnly)
 		return
 	}
 	for _, mgr := range mgrs {

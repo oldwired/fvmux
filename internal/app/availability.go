@@ -45,6 +45,10 @@ func (m *Mux) wireCommandAvailability() {
 	set("no focused pane", hasPane,
 		commands.CmdSplitH, commands.CmdSplitV, commands.CmdClosePane,
 		commands.CmdRenamePane)
+	set("focused pane is not an SSH session", func() bool {
+		leaf := m.availabilityPane()
+		return leaf != nil && leaf.Pane != nil && leaf.Pane.SSHAlias != ""
+	}, commands.CmdSFTPHere, commands.CmdSFTPNewHere)
 	set("focused pane is not running", hasLivePane,
 		commands.CmdLiteralPrefix, commands.CmdEnterCopyMode, commands.CmdPaste,
 		commands.CmdFindScrollback, commands.CmdSendSIGINT, commands.CmdSendSIGQUIT,
@@ -71,13 +75,16 @@ func (m *Mux) wireCommandAvailability() {
 		}, id)
 	}
 
-	set("no focused window", hasWindow, commands.CmdKillWindow, commands.CmdRenameWindow)
+	set("no focused window", hasWindow, commands.CmdRenameWindow)
+	set("no focused window", func() bool {
+		return m.currentWindow() != nil || m.currentFileWindow() != nil
+	}, commands.CmdKillWindow)
 	set("no windows", hasWindows, commands.CmdWindowList, commands.CmdFindWindow,
 		commands.CmdFlashNumbers)
 	set("requires at least two windows", hasMultipleWindows,
 		commands.CmdNextWindow, commands.CmdPrevWindow)
 	set("no previous window", func() bool {
-		return m.lastFocused != nil && m.windows[m.lastFocused] != nil
+		return m.lastFocused != nil && m.workspaceWindowExists(m.lastFocused)
 	}, commands.CmdLastWindow)
 	set("no eligible single-pane window", m.hasJoinableWindow, commands.CmdJoinFrom)
 

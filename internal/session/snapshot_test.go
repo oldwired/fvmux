@@ -12,10 +12,11 @@ func TestSnapshot_RoundTripPreservesFidelityFields(t *testing.T) {
 		Name:    "work",
 		Active:  1,
 		Windows: []*WindowSnapshot{
-			{ID: 1, Number: 1, Title: "shell", Layout: "leaf shell",
+			{Kind: "terminal", ID: 1, Number: 1, Title: "shell", Layout: "leaf shell",
 				FocusIndex: 0, Zoomed: 0, SyncInput: false},
-			{ID: 2, Number: 2, Title: "logs", Layout: "split h 0.5 leaf a leaf b",
+			{Kind: "terminal", ID: 2, Number: 2, Title: "logs", Layout: "split h 0.5 leaf a leaf b",
 				FocusIndex: 1, Zoomed: 2, SyncInput: true},
+			{Kind: "files", ID: 3, Number: 4, Alias: "prod", RemoteCWD: "/srv/app", LocalCWD: "/tmp/work", FocusSide: "local"},
 		},
 		MetaPath: filepath.Join(dir, "work.toml"),
 	}
@@ -29,7 +30,7 @@ func TestSnapshot_RoundTripPreservesFidelityFields(t *testing.T) {
 	if got.Version != SnapshotVersion || got.Active != 1 {
 		t.Fatalf("header lost: version=%d active=%d", got.Version, got.Active)
 	}
-	if len(got.Windows) != 2 {
+	if len(got.Windows) != 3 {
 		t.Fatalf("window count = %d", len(got.Windows))
 	}
 	w := got.Windows[1]
@@ -41,6 +42,10 @@ func TestSnapshot_RoundTripPreservesFidelityFields(t *testing.T) {
 	}
 	if !w.SyncInput {
 		t.Error("SyncInput lost in round-trip")
+	}
+	f := got.Windows[2]
+	if f.Kind != "files" || f.Alias != "prod" || f.RemoteCWD != "/srv/app" || f.LocalCWD != "/tmp/work" || f.FocusSide != "local" {
+		t.Fatalf("files window fidelity lost: %#v", f)
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/profile"
 	"github.com/oldwired/fvmux/internal/session"
-	"github.com/oldwired/fvmux/internal/sftp"
 	"github.com/oldwired/fvmux/internal/sshmgr"
 )
 
@@ -55,17 +54,6 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 		Created: time.Now(),
 		Active:  0,
 	}
-	// Live SFTP browsers — one alias per open dialog. Dedup so two
-	// browsers to the same alias only record once (restore will only
-	// reopen once anyway).
-	seen := map[string]bool{}
-	for _, mgr := range sftp.LiveManagers() {
-		if mgr == nil || mgr.Alias == "" || seen[mgr.Alias] {
-			continue
-		}
-		seen[mgr.Alias] = true
-		snap.SFTPAliases = append(snap.SFTPAliases, mgr.Alias)
-	}
 	// Active-window index: Desktop.Current() can be a dialog (SFTP
 	// browser, msgbox) — fall back to m.lastFocused so we capture the
 	// most recently focused fvmux window, not whichever popup happens
@@ -74,6 +62,22 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 	for i, key := range m.windowOrder {
 		ws := m.windows[key]
 		if ws == nil {
+			fw := m.fileWindows[key]
+			if fw == nil {
+				continue
+			}
+			if key == cur {
+				snap.Active = i
+			}
+			if fw.Browser != nil {
+				fw.RemoteCWD, fw.LocalCWD, fw.FocusSide = fw.Browser.RemoteCWD(), fw.Browser.LocalCWD(), fw.Browser.FocusSide()
+			}
+			bv := fw.Frame.BaseView()
+			snap.Windows = append(snap.Windows, &session.WindowSnapshot{
+				Kind: "files", ID: uint64(fw.ID), Number: fw.Number,
+				Pos:   session.RectTOML{X: bv.Origin.X, Y: bv.Origin.Y, W: bv.Size.X, H: bv.Size.Y},
+				Alias: fw.Alias, RemoteCWD: fw.RemoteCWD, LocalCWD: fw.LocalCWD, FocusSide: fw.FocusSide,
+			})
 			continue
 		}
 		if key == cur {
@@ -97,6 +101,7 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 			}
 		}
 		snap.Windows = append(snap.Windows, &session.WindowSnapshot{
+			Kind:      "terminal",
 			ID:        uint64(ws.ID),
 			Number:    ws.Number,
 			Title:     ws.Title,
@@ -114,8 +119,8 @@ func (m *Mux) buildSnapshot() *session.Snapshot {
 	return snap
 }
 
-// LoadSession restores a snapshot: one window per snapshot entry +
-// every SFTP browser the user had open. Callers should close existing
+// LoadSession restores every terminal and Files window in snapshot order.
+// Callers should close existing
 // windows first (openSessionPicker does); LoadSession itself does
 // not — that lets it be used both for full session swap and for
 // initial bootstrap.
@@ -141,6 +146,19 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	for i, ws := range snap.Windows {
 		bounds := geom.NewRect(ws.Pos.X, ws.Pos.Y,
 			ws.Pos.X+ws.Pos.W, ws.Pos.Y+ws.Pos.H)
+		if ws.Kind == "files" {
+			fw := m.openFilesWindow(ws.Alias, ws.RemoteCWD, ws.LocalCWD, ws.FocusSide, &bounds, ws.Number)
+			if fw == nil {
+				failed = append(failed, fmt.Sprintf("files for %s: invalid alias", ws.Alias))
+				continue
+			}
+			if ws.ID != 0 {
+				fw.ID = session.WindowID(ws.ID)
+			}
+			restoredKeys = append(restoredKeys, fw.Frame.Self())
+			restoredOriginalIndices = append(restoredOriginalIndices, i)
+			continue
+		}
 		if err := m.openSnapshotWindow(ws, bounds, hostLookup); err != nil {
 			slog.Warn("session window failed to restore",
 				"window", ws.Title, "err", err)
@@ -169,14 +187,6 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 				"%d of %d windows couldn't be restored:\n%s",
 				[]any{count, total, list}, msgbox.OKOnly)
 		})
-	}
-	// SFTP browsers — schedule each. The restored ssh pane (if any)
-	// for the same alias is already up and running; we just poll for
-	// the master socket and open SFTP non-interactively when it
-	// appears. If auth never completes within the timeout, the browser
-	// silently doesn't open.
-	for _, alias := range snap.SFTPAliases {
-		m.scheduleSftpRestore(alias)
 	}
 	return nil
 }
