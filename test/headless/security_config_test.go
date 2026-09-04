@@ -62,6 +62,17 @@ func TestReleaseTokenIsWriteScopedOnlyToAssembly(t *testing.T) {
 	}
 }
 
+func TestReleaseBinariesEmbedTagVersion(t *testing.T) {
+	t.Parallel()
+	body := string(repositoryFile(t, ".github/workflows/release.yml"))
+	if !strings.Contains(body, "FVMUX_VERSION: ${{ github.ref_name }}") {
+		t.Fatal("release build does not source its version from the pushed tag")
+	}
+	if !strings.Contains(body, `-ldflags "-X main.Version=${FVMUX_VERSION}"`) {
+		t.Fatal("release build does not embed the tag in main.Version")
+	}
+}
+
 func TestSmokeSSHIsLoopbackKeyOnlyAndDigestPinned(t *testing.T) {
 	t.Parallel()
 	body := string(repositoryFile(t, "test/smoke/docker-compose.yml"))

@@ -101,11 +101,12 @@ jobs:
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
+          FVMUX_VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p dist
           ext=""
           if [ "${{ matrix.os }}" = "windows" ]; then ext=".exe"; fi
-          go build -trimpath -o dist/fvmux-${{ matrix.os }}-${{ matrix.arch }}${ext} ./cmd/fvmux
+          go build -trimpath -ldflags "-X main.Version=${FVMUX_VERSION}" -o dist/fvmux-${{ matrix.os }}-${{ matrix.arch }}${ext} ./cmd/fvmux
 
       # Stage binaries as workflow artifacts rather than uploading to
       # the release directly — assemble-release downloads all of them
