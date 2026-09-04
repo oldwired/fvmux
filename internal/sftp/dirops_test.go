@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -208,18 +209,17 @@ func TestStartTree_MergeOverwrites(t *testing.T) {
 func TestStartTreeDownloadRejectsBackslashRemoteName(t *testing.T) {
 	c := newTestClient(t)
 	base := t.TempDir()
-	remoteRoot := filepath.Join(base, "remote")
-	if err := os.MkdirAll(remoteRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	unsafeName := `..\..\escaped.txt`
-	if err := os.WriteFile(filepath.Join(remoteRoot, unsafeName), []byte("attacker"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	localRoot := filepath.Join(base, "local")
 	m := NewManager("test")
-	n, err := m.StartTree(c, Download, localRoot, remoteRoot)
+	// A real Windows filesystem cannot represent a remote POSIX entry whose
+	// name contains backslashes: it interprets them as separators first. Feed
+	// the hostile server response through the injectable directory boundary so
+	// the integration test exercises the same sanitizer on every host OS.
+	m.readRemoteDirectory = func(context.Context, string) (remoteDirectory, error) {
+		return sanitizeRemoteDirectory([]os.FileInfo{remoteInfo{name: unsafeName}}, false), nil
+	}
+	n, err := m.StartTree(c, Download, localRoot, "/remote")
 	if !errors.Is(err, ErrUnsafeRemoteName) {
 		t.Fatalf("StartTree error = %v, want ErrUnsafeRemoteName", err)
 	}

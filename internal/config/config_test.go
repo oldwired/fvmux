@@ -66,11 +66,12 @@ theme = "tokyonight-ish"
 }
 
 func TestPathsWithRoot(t *testing.T) {
-	p := Default().WithRoot("/tmp/x")
-	if p.Root != "/tmp/x" {
+	root := "/tmp/x"
+	p := Default().WithRoot(root)
+	if p.Root != root {
 		t.Errorf("Root = %q", p.Root)
 	}
-	if p.SessionFile("work") != "/tmp/x/sessions/work.toml" {
+	if want := filepath.Join(root, "sessions", "work.toml"); p.SessionFile("work") != want {
 		t.Errorf("SessionFile = %q", p.SessionFile("work"))
 	}
 }

@@ -88,8 +88,8 @@ func TestDefaults_UsesShellEnv(t *testing.T) {
 	}
 
 	t.Setenv("SHELL", "")
-	if d := Defaults(); d[0].Command != "/bin/sh" {
-		t.Fatalf("Defaults with empty SHELL = %q, want /bin/sh", d[0].Command)
+	if d, want := Defaults(), FallbackShell(); d[0].Command != want {
+		t.Fatalf("Defaults with empty SHELL = %q, want %q", d[0].Command, want)
 	}
 }
 

@@ -35,15 +35,17 @@ func TestInstantiateProfileDoesNotMissImmediateExit(t *testing.T) {
 		t.Fatalf("instantiateProfile: %v", err)
 	}
 
-	var deliver func()
-	select {
-	case deliver = <-scheduled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("immediately exiting child never scheduled OnExit")
-	}
-	deliver()
-	if !pane.Dead {
-		t.Fatal("pre-start callback wiring missed the child's immediate exit")
+	// ConPTY may report terminal activity before the process-exit callback.
+	// Drain scheduled UI work until OnExit marks the pane dead instead of
+	// assuming the first callback has a particular type.
+	deadline := time.After(2 * time.Second)
+	for !pane.Dead {
+		select {
+		case deliver := <-scheduled:
+			deliver()
+		case <-deadline:
+			t.Fatal("pre-start callback wiring missed the child's immediate exit")
+		}
 	}
 }
 

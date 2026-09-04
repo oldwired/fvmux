@@ -1,6 +1,7 @@
 package headless
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,7 +20,9 @@ func repositoryFile(t *testing.T, rel string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
+	// These tests inspect workflow meaning, not the checkout's native newline
+	// convention. Normalize CRLF so exact indentation checks are portable.
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 }
 
 func TestWorkflowActionsArePinnedToCommits(t *testing.T) {

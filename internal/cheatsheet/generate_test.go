@@ -23,7 +23,9 @@ func TestBakedCheatsheetInSync(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading %s: %v", path, err)
 		}
-		if got != string(want) {
+		// Git may check text files out with CRLF on Windows. Line-ending
+		// policy is not documentation drift; compare normalized content.
+		if got != strings.ReplaceAll(string(want), "\r\n", "\n") {
 			t.Errorf("%s is stale — run `go generate ./internal/cheatsheet`", path)
 		}
 	}

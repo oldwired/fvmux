@@ -25,6 +25,7 @@ func goldenPath(name string) string {
 // files stay tidy.
 func assertGolden(t *testing.T, name, actual string) {
 	t.Helper()
+	actual = strings.ReplaceAll(actual, "\r\n", "\n")
 	actual = strings.TrimSuffix(actual, "\n")
 	path := goldenPath(name)
 	if *updateGoldens {
@@ -41,7 +42,8 @@ func assertGolden(t *testing.T, name, actual string) {
 	if err != nil {
 		t.Fatalf("read golden %s: %v (run with -update to create)", path, err)
 	}
-	wantStr := strings.TrimSuffix(string(want), "\n")
+	wantStr := strings.ReplaceAll(string(want), "\r\n", "\n")
+	wantStr = strings.TrimSuffix(wantStr, "\n")
 	if actual != wantStr {
 		t.Errorf("golden %s mismatch:\n--- got ---\n%s\n--- want ---\n%s",
 			name, actual, wantStr)
