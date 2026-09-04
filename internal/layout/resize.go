@@ -17,8 +17,8 @@ func ResizeToward(leaf *PaneNode, dir Direction, cells int) bool {
 		return false
 	}
 	orient := views.SplitVertical
-	wantFirstChild := true
-	sign := 1
+	var wantFirstChild bool
+	var sign int
 	switch dir {
 	case Right:
 		wantFirstChild = true
