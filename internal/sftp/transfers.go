@@ -35,8 +35,6 @@ const partSuffix = ".part-fvmux"
 // harmless repeated input rather than presenting it as a transport failure.
 var ErrDestinationBusy = errors.New("transfer destination is already in progress")
 
-var fallbackPartID atomic.Uint64
-
 // Direction is the transfer direction.
 type Direction uint8
 
@@ -77,6 +75,14 @@ type Transfer struct {
 	// partPath isolates the actual temporary file across managers/processes.
 	destinationKey string
 	partPath       string
+
+	// Root-relative access keeps tree uploads and every download confined to
+	// the local directory the user selected. ownsLocalRoot is true for a
+	// single-file download; tree transfers share a root closed by finishTree.
+	localRoot     *os.Root
+	localRel      string
+	partRel       string
+	ownsLocalRoot bool
 }
 
 // requestCancel closes t.cancel exactly once across all callers. Safe
@@ -153,10 +159,9 @@ type Manager struct {
 	lifetime context.Context
 
 	// openDedicated, when set, opens a fresh SFTP session (its own ssh
-	// subprocess over the alias's ControlMaster) for a single-file
-	// transfer, so a hard cancel can close that session and abort an
-	// in-flight read/write immediately. nil ⇒ StartDedicated falls back
-	// to the shared client (cooperative cancel only).
+	// subprocess over the alias's ControlMaster) for a single-file transfer
+	// or one whole folder operation. Owning the transport makes stalled
+	// remote calls interruptible. nil means tests/fallback use the shared client.
 	openDedicated func() (dedicatedConn, error)
 
 	// sem bounds how many transfers move their payload at once (see
@@ -164,6 +169,11 @@ type Manager struct {
 	// without this cap a large tree would fan every file onto the single
 	// shared SFTP session simultaneously. nil ⇒ unbounded (no SetParallel).
 	sem chan struct{}
+
+	// queueSlots bounds transfer records and goroutines created ahead of the
+	// active-payload semaphore. Enumeration blocks with cancellation-aware
+	// backpressure when the queue is full.
+	queueSlots chan struct{}
 
 	mu   sync.Mutex
 	list []*Transfer
@@ -175,6 +185,8 @@ type Manager struct {
 	treeClaims map[string]struct{}
 	scans      map[string]time.Time
 	wg         sync.WaitGroup // tracks live run + abort-watcher goroutines.
+
+	readRemoteDirectory func(context.Context, string) (remoteDirectory, error)
 }
 
 // dedicatedConn is the slice of *Client that StartDedicated needs: the
@@ -187,7 +199,12 @@ type dedicatedConn interface {
 }
 
 // NewManager returns an empty transfer manager bound to alias.
-func NewManager(alias string) *Manager { return &Manager{Alias: alias, lifetime: context.Background()} }
+func NewManager(alias string) *Manager {
+	return &Manager{
+		Alias: alias, lifetime: context.Background(),
+		queueSlots: make(chan struct{}, maxQueuedTransfers),
+	}
+}
 
 // SetParallel bounds how many file payloads move concurrently on this
 // manager. config.SFTP.Parallel feeds it (default 1); the browser calls
@@ -221,6 +238,10 @@ func (m *Manager) EnableDedicatedTransfersContext(ctx context.Context, controlPa
 	}
 }
 
+func (m *Manager) SetRemoteDirectoryReader(fn func(context.Context, string) (remoteDirectory, error)) {
+	m.readRemoteDirectory = fn
+}
+
 func (m *Manager) contextErr() error {
 	if m.lifetime == nil {
 		return nil
@@ -252,22 +273,81 @@ func (m *Manager) StartMove(c *pkgsftp.Client, dir Direction, localPath, remoteP
 // enqueue stats the source for its size, registers the transfer, and
 // launches its run goroutine. removeSource is nil for a plain copy.
 func (m *Manager) enqueue(c *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error) (*Transfer, error) {
+	return m.enqueueRooted(c, dir, localPath, remotePath, removeSource, nil, "", false)
+}
+
+func (m *Manager) enqueueRooted(c *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error, localRoot *os.Root, localRel string, ownsLocalRoot bool) (*Transfer, error) {
+	if err := m.acquireQueueSlot(); err != nil {
+		if ownsLocalRoot && localRoot != nil {
+			_ = localRoot.Close()
+		}
+		return nil, err
+	}
+	queued := true
+	defer func() {
+		if queued {
+			<-m.queueSlots
+		}
+	}()
+	if dir == Download && localRoot == nil {
+		var err error
+		localRoot, err = openSecureLocalRoot(filepath.Dir(localPath))
+		if err != nil {
+			return nil, err
+		}
+		localRel = filepath.Base(localPath)
+		ownsLocalRoot = true
+	}
+
 	var size int64
 	switch dir {
 	case Upload:
-		fi, err := os.Stat(localPath)
+		var fi os.FileInfo
+		var err error
+		if localRoot != nil {
+			fi, err = localRoot.Stat(localRel)
+		} else {
+			fi, err = os.Stat(localPath)
+		}
 		if err != nil {
+			if ownsLocalRoot && localRoot != nil {
+				_ = localRoot.Close()
+			}
 			return nil, err
 		}
 		size = fi.Size()
 	case Download:
 		fi, err := c.Stat(remotePath)
 		if err != nil {
+			if ownsLocalRoot && localRoot != nil {
+				_ = localRoot.Close()
+			}
 			return nil, err
 		}
 		size = fi.Size()
 	}
 	destKey, destPath := transferDestination(dir, localPath, remotePath)
+	partPath := ""
+	partRel := ""
+	var err error
+	if dir == Download {
+		partRel, err = uniquePartPath(localRel)
+		if err != nil {
+			if ownsLocalRoot && localRoot != nil {
+				_ = localRoot.Close()
+			}
+			return nil, err
+		}
+		partPath = filepath.Join(localRoot.Name(), partRel)
+	} else {
+		partPath, err = uniquePartPath(destPath)
+		if err != nil {
+			if ownsLocalRoot && localRoot != nil {
+				_ = localRoot.Close()
+			}
+			return nil, err
+		}
+	}
 	t := &Transfer{
 		Direction:      dir,
 		LocalPath:      localPath,
@@ -278,22 +358,59 @@ func (m *Manager) enqueue(c *pkgsftp.Client, dir Direction, localPath, remotePat
 		done:           make(chan struct{}),
 		removeSource:   removeSource,
 		destinationKey: destKey,
-		partPath:       uniquePartPath(destPath),
+		partPath:       partPath,
+		localRoot:      localRoot,
+		localRel:       localRel,
+		partRel:        partRel,
+		ownsLocalRoot:  ownsLocalRoot,
 	}
 	t.status.Store(StatusQueued)
 	m.mu.Lock()
 	for _, existing := range m.list {
 		if IsActiveStatus(existing.Status()) && existing.destinationKey == destKey {
 			m.mu.Unlock()
+			if ownsLocalRoot && localRoot != nil {
+				_ = localRoot.Close()
+			}
 			return nil, fmt.Errorf("%w: %s", ErrDestinationBusy, destPath)
 		}
 	}
+	m.pruneCompletedLocked(maxRetainedTransfers - 1)
 	m.list = append(m.list, t)
 	m.mu.Unlock()
 
 	m.wg.Add(1) // paired with Done in run; before the goroutine starts.
 	go m.run(c, t)
+	queued = false
 	return t, nil
+}
+
+func (m *Manager) acquireQueueSlot() error {
+	if err := m.contextErr(); err != nil {
+		return err
+	}
+	select {
+	case m.queueSlots <- struct{}{}:
+		return nil
+	case <-m.lifetime.Done():
+		return m.contextErr()
+	}
+}
+
+func (m *Manager) pruneCompletedLocked(target int) {
+	if len(m.list) <= target {
+		return
+	}
+	need := len(m.list) - target
+	kept := make([]*Transfer, 0, len(m.list)-need)
+	for _, transfer := range m.list {
+		if need > 0 && !IsActiveStatus(transfer.Status()) {
+			need--
+			continue
+		}
+		kept = append(kept, transfer)
+	}
+	m.list = kept
 }
 
 // transferDestination returns a namespace-qualified key plus the concrete
@@ -308,15 +425,12 @@ func transferDestination(dir Direction, localPath, remotePath string) (string, s
 	return "local\x00" + clean, clean
 }
 
-func uniquePartPath(destination string) string {
-	var nonce [8]byte
-	if _, err := rand.Read(nonce[:]); err == nil {
-		return destination + partSuffix + "." + hex.EncodeToString(nonce[:])
+func uniquePartPath(destination string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("secure temporary name: %w", err)
 	}
-	// crypto/rand failure must not make transfers unusable. PID plus a
-	// process-local monotonic counter retains practical uniqueness.
-	return fmt.Sprintf("%s%s.%d.%d", destination, partSuffix,
-		os.Getpid(), fallbackPartID.Add(1))
+	return destination + partSuffix + "." + hex.EncodeToString(nonce[:]), nil
 }
 
 func (m *Manager) claimTreeDestination(key string) bool {
@@ -342,10 +456,9 @@ func (m *Manager) releaseTreeDestination(key string) {
 // removeSource) on its own SFTP session so a cancel can hard-abort it:
 // closing that session unblocks a read/write wedged on a dead link
 // immediately, instead of waiting for the next cooperative chunk check.
-// Folder transfers deliberately stay on the shared client (StartTree) to
-// avoid one ssh subprocess per file. If no dedicated opener is configured
-// (or it fails), the transfer falls back to the shared client and remains
-// cooperative-cancel only.
+// Folder transfers use one operation-owned session per tree, not one process
+// per file. If no dedicated opener is configured, a single-file transfer
+// falls back to the shared client and remains cooperative-cancel only.
 func (m *Manager) StartDedicated(shared *pkgsftp.Client, dir Direction, localPath, remotePath string, removeSource func() error) (*Transfer, error) {
 	if m.openDedicated == nil {
 		return m.enqueue(shared, dir, localPath, remotePath, removeSource)
@@ -545,6 +658,10 @@ func captionFor(t *Transfer) string {
 
 func (m *Manager) run(c *pkgsftp.Client, t *Transfer) {
 	defer m.wg.Done()
+	defer func() { <-m.queueSlots }()
+	if t.ownsLocalRoot && t.localRoot != nil {
+		defer func() { _ = t.localRoot.Close() }()
+	}
 	if t.done != nil {
 		defer close(t.done)
 	}
@@ -596,7 +713,13 @@ var errWriteStall = fmt.Errorf("destination write stalled (n=0 with no error)")
 func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 	switch t.Direction {
 	case Upload:
-		lf, err := os.Open(t.LocalPath)
+		var lf *os.File
+		var err error
+		if t.localRoot != nil {
+			lf, err = t.localRoot.Open(t.localRel)
+		} else {
+			lf, err = os.Open(t.LocalPath)
+		}
 		if err != nil {
 			return err
 		}
@@ -623,8 +746,8 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 			return err
 		}
 		defer func() { _ = rf.Close() }()
-		tmp := t.partPath
-		lf, err := os.Create(tmp)
+		tmp := t.partRel
+		lf, err := t.localRoot.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return err
 		}
@@ -633,11 +756,11 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 			perr = cerr
 		}
 		if perr != nil {
-			_ = os.Remove(tmp)
+			_ = t.localRoot.Remove(tmp)
 			return perr
 		}
-		if err := os.Rename(tmp, t.LocalPath); err != nil {
-			_ = os.Remove(tmp)
+		if err := t.localRoot.Rename(tmp, t.localRel); err != nil {
+			_ = t.localRoot.Remove(tmp)
 			return err
 		}
 		return nil

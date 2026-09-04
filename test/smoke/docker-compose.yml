@@ -1,14 +1,14 @@
 services:
   sshd:
-    image: linuxserver/openssh-server:latest
+    image: ghcr.io/linuxserver/openssh-server:10.3_p1-r0-ls233@sha256:96b9a4d3b5106746d08d43a6911650d4d21f7d5c7f2ac9660e792bdb5e63157c
     ports:
-      - "2222:2222"
+      - "127.0.0.1:2222:2222"
     environment:
-      - USER_NAME=fvmux
-      - USER_PASSWORD=fvmux
-      - PASSWORD_ACCESS=true
-      - SUDO_ACCESS=false
-      - PUID=1000
-      - PGID=1000
-      - TZ=UTC
-    restart: unless-stopped
+      USER_NAME: fvmux
+      PUBLIC_KEY: "${FVMUX_SMOKE_PUBLIC_KEY:?set FVMUX_SMOKE_PUBLIC_KEY to an ephemeral public key}"
+      PASSWORD_ACCESS: "false"
+      SUDO_ACCESS: "false"
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    restart: "no"

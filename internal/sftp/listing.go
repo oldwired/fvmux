@@ -40,6 +40,11 @@ func buildRemoteListing(s *pkgsftp.Client, cwd string) []*treeview.Node {
 			{Label: "<error: " + err.Error() + ">"},
 		}
 	}
+	return buildRemoteListingEntries(cwd, sanitizeRemoteDirectory(entries, false))
+}
+
+func buildRemoteListingEntries(cwd string, directory remoteDirectory) []*treeview.Node {
+	entries := directory.entries
 	sort.Slice(entries, func(i, j int) bool {
 		di, dj := entries[i].IsDir(), entries[j].IsDir()
 		if di != dj {
@@ -60,6 +65,12 @@ func buildRemoteListing(s *pkgsftp.Client, cwd string) []*treeview.Node {
 			Label: formatListingRow(e.Name(), e.IsDir(), e.Size(), e.ModTime()),
 			Data:  &fileEntry{Path: joinRemote(cwd, e.Name()), IsDir: e.IsDir()},
 		})
+	}
+	if directory.rejected > 0 {
+		out = append(out, &treeview.Node{Label: "<unsafe remote names omitted>"})
+	}
+	if directory.truncated {
+		out = append(out, &treeview.Node{Label: "<directory limit reached>"})
 	}
 	return out
 }

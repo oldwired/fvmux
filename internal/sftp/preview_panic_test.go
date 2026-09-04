@@ -1,11 +1,14 @@
 package sftp
 
 import (
-	"errors"
+	"bytes"
 	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
@@ -18,13 +21,26 @@ import (
 // depending on a real x/image bug being present.
 const panicMagic = "FVMUXPANICIMG"
 
+const oversizedMagic = "FVMUXOVERSIZEDIMG"
+
+var oversizedDecodeCalled atomic.Bool
+
 func init() {
 	image.RegisterFormat("fvmux-panic-test", panicMagic,
 		func(io.Reader) (image.Image, error) {
 			panic("decoder blew up on crafted input")
 		},
 		func(io.Reader) (image.Config, error) {
-			return image.Config{}, errors.New("no config")
+			return image.Config{Width: 1, Height: 1}, nil
+		},
+	)
+	image.RegisterFormat("fvmux-oversized-test", oversizedMagic,
+		func(io.Reader) (image.Image, error) {
+			oversizedDecodeCalled.Store(true)
+			return image.NewRGBA(image.Rect(0, 0, 1, 1)), nil
+		},
+		func(io.Reader) (image.Config, error) {
+			return image.Config{Width: maxImageDimension + 1, Height: 1}, nil
 		},
 	)
 }
@@ -64,5 +80,38 @@ func TestBuildPreview_PanickingDecoderDegradesToHex(t *testing.T) {
 	}
 	if _, ok := v.(*hexedit.HexEditor); !ok {
 		t.Fatalf("BuildLocalPreview = %T; want *hexedit.HexEditor fallback", v)
+	}
+}
+
+func TestDecodeImageUsesOneImmutableSnapshot(t *testing.T) {
+	var encoded bytes.Buffer
+	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pixel.Set(0, 0, color.White)
+	if err := png.Encode(&encoded, pixel); err != nil {
+		t.Fatal(err)
+	}
+	opens := 0
+	open := func() (io.ReadCloser, error) {
+		opens++
+		return io.NopCloser(bytes.NewReader(encoded.Bytes())), nil
+	}
+	if v := decodeImage(open, geom.NewRect(0, 0, 10, 10)); v == nil {
+		t.Fatal("decodeImage returned nil for a one-pixel PNG")
+	}
+	if opens != 1 {
+		t.Fatalf("decodeImage opened the source %d times, want one immutable snapshot", opens)
+	}
+}
+
+func TestDecodeImageRejectsOversizedHeaderBeforePixelDecode(t *testing.T) {
+	oversizedDecodeCalled.Store(false)
+	open := func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte(oversizedMagic))), nil
+	}
+	if v := decodeImage(open, geom.NewRect(0, 0, 10, 10)); v != nil {
+		t.Fatalf("decodeImage = %T, want nil for oversized dimensions", v)
+	}
+	if oversizedDecodeCalled.Load() {
+		t.Fatal("pixel decoder ran after DecodeConfig exceeded the dimension budget")
 	}
 }

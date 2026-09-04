@@ -2,7 +2,9 @@ package sftp
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -66,13 +68,128 @@ func TestStartRejectsConcurrentDestinationWriter(t *testing.T) {
 
 func TestUniquePartPathDoesNotShareWriters(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "file")
-	a, b := uniquePartPath(destination), uniquePartPath(destination)
+	a, err := uniquePartPath(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := uniquePartPath(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a == b {
 		t.Fatalf("uniquePartPath returned the same path twice: %q", a)
 	}
 	prefix := destination + partSuffix + "."
 	if !strings.HasPrefix(a, prefix) || !strings.HasPrefix(b, prefix) {
 		t.Fatalf("part paths %q and %q do not use prefix %q", a, b, prefix)
+	}
+}
+
+func TestDownloadTemporarySymlinkCannotOverwriteTarget(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.txt")
+	if err := os.WriteFile(remote, []byte("download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(base, "victim.txt")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(base, "destination.txt")
+
+	m := NewManager("test")
+	m.SetParallel(1)
+	m.sem <- struct{}{} // hold the transfer before it opens the temporary file.
+	tr, err := m.Start(c, Download, destination, remote)
+	if err != nil {
+		<-m.sem
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, tr.partPath); err != nil {
+		<-m.sem
+		m.CancelAll()
+		m.Wait()
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	<-m.sem
+	m.Wait()
+
+	if tr.Status() != StatusFailed {
+		t.Fatalf("transfer status = %s, want failed", StatusName(tr.Status()))
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "keep" {
+		t.Fatalf("victim contents = %q, want %q", got, "keep")
+	}
+}
+
+func TestTransferQueueIsBoundedAndCancellationAware(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote.txt")
+	if err := os.WriteFile(remote, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m := NewManager("test")
+	m.lifetime = ctx
+	m.SetParallel(1)
+	m.sem <- struct{}{}
+	for i := 0; i < maxQueuedTransfers; i++ {
+		destination := filepath.Join(base, fmt.Sprintf("download-%d", i))
+		if _, err := m.Start(c, Download, destination, remote); err != nil {
+			<-m.sem
+			m.CancelAll()
+			m.Wait()
+			t.Fatalf("Start %d: %v", i, err)
+		}
+	}
+
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := m.Start(c, Download, filepath.Join(base, "overflow"), remote)
+		blocked <- err
+	}()
+	select {
+	case err := <-blocked:
+		t.Fatalf("overflow Start returned before cancellation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("overflow Start error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("overflow Start did not unblock on cancellation")
+	}
+	if got := len(m.Snapshot()); got != maxQueuedTransfers {
+		t.Fatalf("manager retained %d active transfers, want queue cap %d", got, maxQueuedTransfers)
+	}
+	m.CancelAll()
+	<-m.sem
+	m.Wait()
+}
+
+func TestCompletedTransferRetentionIsBounded(t *testing.T) {
+	t.Parallel()
+	m := NewManager("test")
+	for i := 0; i < maxRetainedTransfers+100; i++ {
+		tr := &Transfer{}
+		tr.status.Store(StatusDone)
+		m.list = append(m.list, tr)
+	}
+	m.mu.Lock()
+	m.pruneCompletedLocked(maxRetainedTransfers)
+	m.mu.Unlock()
+	if got := len(m.Snapshot()); got != maxRetainedTransfers {
+		t.Fatalf("retained %d completed transfers, want %d", got, maxRetainedTransfers)
 	}
 }
 

@@ -23,8 +23,12 @@ func buildRemoteTree(s *pkgsftp.Client, cwd string) []*treeview.Node {
 			{Label: "<error: " + err.Error() + ">"},
 		}
 	}
-	dirs := make([]os.FileInfo, 0, len(entries))
-	for _, e := range entries {
+	return buildRemoteTreeEntries(cwd, sanitizeRemoteDirectory(entries, false))
+}
+
+func buildRemoteTreeEntries(cwd string, directory remoteDirectory) []*treeview.Node {
+	dirs := make([]os.FileInfo, 0, len(directory.entries))
+	for _, e := range directory.entries {
 		if e.IsDir() {
 			dirs = append(dirs, e)
 		}
@@ -38,6 +42,12 @@ func buildRemoteTree(s *pkgsftp.Client, cwd string) []*treeview.Node {
 			Data:        &fileEntry{Path: joinRemote(cwd, e.Name()), IsDir: true},
 			HasChildren: true,
 		})
+	}
+	if directory.rejected > 0 {
+		out = append(out, &treeview.Node{Label: "<unsafe remote names omitted>"})
+	}
+	if directory.truncated {
+		out = append(out, &treeview.Node{Label: "<directory limit reached>"})
 	}
 	return out
 }

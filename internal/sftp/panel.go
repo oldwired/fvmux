@@ -5,6 +5,7 @@
 package sftp
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -55,6 +56,69 @@ type panel struct {
 	// path while their first network round-trip is still running.
 	opMu       sync.Mutex
 	pendingOps map[string]struct{}
+
+	ctx           context.Context
+	readDirectory func(context.Context, string) (remoteDirectory, error)
+	treeBudget    *remoteTreeBudget
+}
+
+type remoteTreeBudget struct {
+	mu    sync.Mutex
+	used  int
+	limit int
+}
+
+func countRemoteTreeNodes(nodes []*treeview.Node) int {
+	n := 0
+	for _, node := range nodes {
+		if node != nil && node.Data != nil {
+			n++
+		}
+	}
+	return n
+}
+
+func (b *remoteTreeBudget) accept(nodes []*treeview.Node) []*treeview.Node {
+	if b == nil || b.limit <= 0 {
+		return nodes
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := b.limit - b.used
+	out := make([]*treeview.Node, 0, len(nodes)+1)
+	limited := false
+	for _, node := range nodes {
+		if node == nil || node.Data == nil {
+			out = append(out, node)
+			continue
+		}
+		if remaining <= 0 {
+			limited = true
+			continue
+		}
+		out = append(out, node)
+		b.used++
+		remaining--
+	}
+	if limited {
+		out = append(out, &treeview.Node{Label: "<tree node limit reached>"})
+	}
+	return out
+}
+
+func (p *panel) loadRemoteDirectory(remotePath string) (remoteDirectory, error) {
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p.readDirectory != nil {
+		return p.readDirectory(ctx, remotePath)
+	}
+	entries, err := p.c.ReadDirContext(ctx, remotePath)
+	if err != nil {
+		return remoteDirectory{}, err
+	}
+	return sanitizeRemoteDirectory(entries, false), nil
 }
 
 // newPanel builds tree + listing for one side, inserts them into d,
@@ -276,7 +340,13 @@ func (p *panel) remoteRefreshLoop() {
 		p.refPending = false
 		p.refMu.Unlock()
 
-		roots := buildRemoteListing(p.c, cwd) // network read, off the UI goroutine.
+		directory, err := p.loadRemoteDirectory(cwd) // network read, off the UI goroutine.
+		var roots []*treeview.Node
+		if err != nil {
+			roots = []*treeview.Node{{Label: "<error: " + err.Error() + ">"}}
+		} else {
+			roots = buildRemoteListingEntries(cwd, directory)
+		}
 		views.CallSoon(func() {
 			// Drop the result if the browser closed or the user navigated
 			// away while the read was in flight.
@@ -330,7 +400,6 @@ func (p *panel) expandRemoteAsync(n *treeview.Node) {
 	placeholder := &treeview.Node{Label: "Loading…", Parent: n}
 	n.Children = []*treeview.Node{placeholder}
 
-	c := p.c
 	path := e.Path
 	if p.refreshWG != nil {
 		p.refreshWG.Add(1) // gates the browser's client.Close on teardown.
@@ -339,7 +408,13 @@ func (p *panel) expandRemoteAsync(n *treeview.Node) {
 		if p.refreshWG != nil {
 			defer p.refreshWG.Done()
 		}
-		kids := buildRemoteTree(c, path) // network read, off the UI goroutine.
+		directory, err := p.loadRemoteDirectory(path) // network read, off the UI goroutine.
+		var kids []*treeview.Node
+		if err != nil {
+			kids = []*treeview.Node{{Label: "<error: " + err.Error() + ">"}}
+		} else {
+			kids = buildRemoteTreeEntries(path, directory)
+		}
 		views.CallSoon(func() {
 			if p.closed != nil && p.closed.Load() {
 				return // browser tore down while the read was in flight.
@@ -350,6 +425,7 @@ func (p *panel) expandRemoteAsync(n *treeview.Node) {
 			if len(n.Children) != 1 || n.Children[0] != placeholder {
 				return
 			}
+			kids = p.treeBudget.accept(kids)
 			for _, k := range kids {
 				k.Parent = n
 			}

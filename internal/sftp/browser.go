@@ -119,8 +119,13 @@ func defaultConnect(ctx context.Context, alias, controlPath string, hostOpts []s
 		_ = c.Close()
 		return nil, fmt.Errorf("remote folder %s is not a directory", remoteCwd)
 	}
-	tree := buildRemoteTree(c.SFTP(), remoteCwd)
-	listing := buildRemoteListing(c.SFTP(), remoteCwd)
+	directory, err := c.ReadDirectory(ctx, remoteCwd)
+	if err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("read remote folder %s: %w", remoteCwd, err)
+	}
+	tree := buildRemoteTreeEntries(remoteCwd, directory)
+	listing := buildRemoteListingEntries(remoteCwd, directory)
 	if err := ctx.Err(); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -369,6 +374,11 @@ func buildBrowser(a *fvapp.Application, frame *views.Window, alias, controlPath 
 	d.Insert(remoteHeader)
 	d.Insert(localHeader)
 
+	// The lifetime context is shared by bounded directory reads, recursive
+	// scans, and dedicated transfers so closing the Files window interrupts
+	// every network operation before teardown waits for it.
+	lifetimeCtx, lifetimeCancel := context.WithCancel(context.Background())
+
 	// Remote panel (upper-left). Fixed: stays at the top of the
 	// dialog at constant width/height — extra Y goes to the local
 	// panel and TaskProgress strip, extra X goes to the preview.
@@ -395,8 +405,10 @@ func buildBrowser(a *fvapp.Application, frame *views.Window, alias, controlPath 
 	// once teardown starts; refreshWG lets OnClose wait for an in-flight
 	// read to finish before closing the SFTP client. Only the remote
 	// panel does async reads, so only it needs them.
-	lifetimeCtx, lifetimeCancel := context.WithCancel(context.Background())
 	browser := &Browser{Alias: alias, Window: d, client: c, remote: remote, local: local, lifetimeCancel: lifetimeCancel, focusSide: opts.FocusSide}
+	remote.ctx = lifetimeCtx
+	remote.readDirectory = c.ReadDirectory
+	remote.treeBudget = &remoteTreeBudget{used: countRemoteTreeNodes(res.tree), limit: maxRemoteTreeNodes}
 	remote.onActive = func() { browser.focusSide = "remote" }
 	local.onActive = func() { browser.focusSide = "local" }
 	remote.closed = &browser.closed
@@ -408,6 +420,10 @@ func buildBrowser(a *fvapp.Application, frame *views.Window, alias, controlPath 
 	pp := newPreviewPane(d, c.SFTP(), geom.NewRect(previewX0, 2, previewX1, areaBottom))
 	pp.growMode = consts.GfGrowHiX | consts.GfGrowHiY
 	pp.applyGrowMode()
+	pp.ctx = lifetimeCtx
+	pp.openClient = func(ctx context.Context) (*Client, error) {
+		return OpenContext(ctx, alias, controlPath, hostOpts)
+	}
 	pp.closed = &browser.closed // shared with the panels' refresh guards.
 	pp.refreshWG = &browser.refreshWG
 	remote.preview = pp
@@ -418,8 +434,9 @@ func buildBrowser(a *fvapp.Application, frame *views.Window, alias, controlPath 
 	// lifetime and torn down from d.OnClose (set below).
 	mgr := NewManager(alias)
 	mgr.SetParallel(parallel) // cap concurrent file transfers (config.SFTP.Parallel).
-	// Single-file F5/F6 transfers get their own ssh session off the same
-	// ControlMaster, so Del can hard-abort one wedged on a dead link.
+	mgr.SetRemoteDirectoryReader(c.ReadDirectory)
+	// Single-file F5/F6 transfers and whole folder operations get an owned ssh
+	// session off the same ControlMaster, so a dead link can be hard-aborted.
 	mgr.EnableDedicatedTransfersContext(lifetimeCtx, controlPath, hostOpts)
 	addLiveMgr(mgr)
 	browser.Manager = mgr
@@ -540,6 +557,15 @@ type previewPane struct {
 	closed    *atomic.Bool
 	refreshWG *sync.WaitGroup
 	gen       uint64
+
+	// Only one remote preview may read/decode at once. Each activation owns a
+	// cancellable SFTP subprocess; a newer preview cancels the previous one,
+	// while the slot prevents already-buffered image decodes from accumulating.
+	ctx           context.Context
+	previewCancel context.CancelFunc
+	previewSlots  chan struct{}
+	openClient    func(context.Context) (*Client, error)
+	render        func(*pkgsftp.Client, string, geom.Rect) views.View
 }
 
 func newPreviewPane(d *views.Window, c *pkgsftp.Client, bounds geom.Rect) *previewPane {
@@ -554,7 +580,11 @@ func newPreviewPane(d *views.Window, c *pkgsftp.Client, bounds geom.Rect) *previ
 		"- **Terminal** — return to the matching SSH terminal.\n" +
 		"- **Esc** or **Close** — close this Files window.")
 	d.Insert(mv)
-	return &previewPane{d: d, c: c, bounds: bounds, current: mv}
+	return &previewPane{
+		d: d, c: c, bounds: bounds, current: mv,
+		previewSlots: make(chan struct{}, 1),
+		render:       BuildPreview,
+	}
 }
 
 // applyGrowMode pushes the configured GrowMode onto the current
@@ -589,17 +619,26 @@ func (p *previewPane) show(path string) {
 	p.gen++
 	myGen := p.gen
 	bounds := p.bounds
-	c := p.c
+	if p.previewCancel != nil {
+		p.previewCancel()
+	}
+	baseCtx := p.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	previewCtx, cancel := context.WithCancel(baseCtx)
+	p.previewCancel = cancel
 	p.swap(loadingPreview(bounds, path))
 
 	if p.refreshWG != nil {
 		p.refreshWG.Add(1) // gates the browser's client.Close on teardown.
 	}
 	go func() {
+		defer cancel()
 		if p.refreshWG != nil {
 			defer p.refreshWG.Done()
 		}
-		next := BuildPreview(c, path, bounds) // network read, off the UI goroutine.
+		next := p.buildRemote(previewCtx, path, bounds) // network read, off the UI goroutine.
 		views.CallSoon(func() {
 			if p.closed != nil && p.closed.Load() {
 				return // browser tore down while the read was in flight.
@@ -607,9 +646,41 @@ func (p *previewPane) show(path string) {
 			if myGen != p.gen {
 				return // user previewed another file meanwhile.
 			}
+			p.previewCancel = nil
 			p.swap(next)
 		})
 	}()
+}
+
+func (p *previewPane) buildRemote(ctx context.Context, path string, bounds geom.Rect) views.View {
+	if p.previewSlots != nil {
+		select {
+		case p.previewSlots <- struct{}{}:
+			defer func() { <-p.previewSlots }()
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	client := p.c
+	if p.openClient != nil {
+		owned, err := p.openClient(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return errorPreview(bounds, err.Error())
+		}
+		defer func() { _ = owned.Close() }()
+		client = owned.SFTP()
+	}
+	render := p.render
+	if render == nil {
+		render = BuildPreview
+	}
+	return render(client, path, bounds)
 }
 
 // showLocal is show() for local-FS paths — reads via os.Open instead of
@@ -619,6 +690,10 @@ func (p *previewPane) show(path string) {
 // drops its stale result instead of clobbering this preview.
 func (p *previewPane) showLocal(path string) {
 	p.refreshBounds()
+	if p.previewCancel != nil {
+		p.previewCancel()
+		p.previewCancel = nil
+	}
 	p.gen++
 	next := BuildLocalPreview(path, p.bounds)
 	p.swap(next)

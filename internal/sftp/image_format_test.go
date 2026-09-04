@@ -3,6 +3,7 @@ package sftp
 import (
 	"image"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +19,27 @@ func TestSniff_ExtraImageExtensions(t *testing.T) {
 		if got := Sniff(name, []byte{0x00, 0x01, 0x02, 0x03}); got != KindImage {
 			t.Errorf("Sniff(%q) = %d, want KindImage", name, got)
 		}
+	}
+}
+
+func TestImageDimensionsAllowed(t *testing.T) {
+	tests := []struct {
+		name          string
+		width, height int
+		want          bool
+	}{
+		{name: "ordinary 4k", width: 3840, height: 2160, want: true},
+		{name: "zero width", width: 0, height: 1},
+		{name: "dimension cap", width: maxImageDimension + 1, height: 1},
+		{name: "decoded byte cap", width: 4096, height: 4096},
+		{name: "overflow scale", width: math.MaxInt, height: math.MaxInt},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := imageDimensionsAllowed(tc.width, tc.height); got != tc.want {
+				t.Fatalf("imageDimensionsAllowed(%d, %d) = %v, want %v", tc.width, tc.height, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestStartTreeRejectsDuplicateRootUntilWholeTreeFinishes(t *testing.T) {
@@ -201,5 +202,143 @@ func TestStartTree_MergeOverwrites(t *testing.T) {
 	}
 	if got := readTree(t, dstRoot); !reflect.DeepEqual(got, want) {
 		t.Fatalf("merged tree mismatch:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+func TestStartTreeDownloadRejectsBackslashRemoteName(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	remoteRoot := filepath.Join(base, "remote")
+	if err := os.MkdirAll(remoteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unsafeName := `..\..\escaped.txt`
+	if err := os.WriteFile(filepath.Join(remoteRoot, unsafeName), []byte("attacker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	localRoot := filepath.Join(base, "local")
+	m := NewManager("test")
+	n, err := m.StartTree(c, Download, localRoot, remoteRoot)
+	if !errors.Is(err, ErrUnsafeRemoteName) {
+		t.Fatalf("StartTree error = %v, want ErrUnsafeRemoteName", err)
+	}
+	if n != 0 {
+		t.Fatalf("StartTree enqueued %d files, want 0", n)
+	}
+	m.Wait()
+	if got := len(m.Snapshot()); got != 0 {
+		t.Fatalf("manager retained %d transfers, want 0", got)
+	}
+}
+
+func TestStartTreeDownloadRejectsDestinationDirectorySymlink(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	remoteRoot := filepath.Join(base, "remote")
+	writeTree(t, remoteRoot, map[string]string{"linked/escape.txt": "attacker"})
+
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	localRoot := filepath.Join(base, "local")
+	if err := os.MkdirAll(localRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(localRoot, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	m := NewManager("test")
+	if _, err := m.StartTree(c, Download, localRoot, remoteRoot); err == nil {
+		t.Fatal("StartTree succeeded through a destination-directory symlink")
+	}
+	m.Wait()
+	if _, err := os.Stat(filepath.Join(outside, "escape.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside file stat = %v, want not-exist", err)
+	}
+}
+
+func TestStartTreeDownloadRejectsRelativeSymlinkOutsideSelectedTree(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	remoteRoot := filepath.Join(base, "remote")
+	writeTree(t, remoteRoot, map[string]string{"linked/escape.txt": "attacker"})
+
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	localRoot := filepath.Join(base, "local")
+	if err := os.MkdirAll(localRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../outside", filepath.Join(localRoot, "linked")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	m := NewManager("test")
+	if _, err := m.StartTree(c, Download, localRoot, remoteRoot); err == nil {
+		t.Fatal("StartTree followed a relative link outside the selected destination")
+	}
+	m.Wait()
+	if _, err := os.Stat(filepath.Join(outside, "escape.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside file stat = %v, want not-exist", err)
+	}
+}
+
+func TestStartTreeUploadRejectsFileSymlink(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	srcRoot := filepath.Join(base, "src")
+	if err := os.MkdirAll(srcRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(base, "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(srcRoot, "linked.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	remoteRoot := filepath.Join(base, "remote")
+	m := NewManager("test")
+	n, err := m.StartTree(c, Upload, srcRoot, remoteRoot)
+	if !errors.Is(err, ErrUnsafeLocalLink) {
+		t.Fatalf("StartTree error = %v, want ErrUnsafeLocalLink", err)
+	}
+	if n != 0 {
+		t.Fatalf("StartTree enqueued %d files, want 0", n)
+	}
+	m.Wait()
+	if _, err := os.Stat(filepath.Join(remoteRoot, "linked.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("remote linked file stat = %v, want not-exist", err)
+	}
+}
+
+func TestStartTreeUsesAndReapsOperationOwnedConnection(t *testing.T) {
+	shared := newTestClient(t)
+	dedicated := newTestClient(t)
+	owned := &fakeConn{client: dedicated, closedCh: make(chan struct{})}
+	base := t.TempDir()
+	srcRoot := filepath.Join(base, "src")
+	writeTree(t, srcRoot, map[string]string{"file.txt": "payload"})
+	remoteRoot := filepath.Join(base, "remote")
+
+	m := NewManager("test")
+	m.openDedicated = func() (dedicatedConn, error) { return owned, nil }
+	if _, err := m.StartTree(shared, Upload, srcRoot, remoteRoot); err != nil {
+		t.Fatal(err)
+	}
+	m.Wait()
+	if got, err := os.ReadFile(filepath.Join(remoteRoot, "file.txt")); err != nil || string(got) != "payload" {
+		t.Fatalf("operation-owned transfer result = %q, %v", got, err)
+	}
+	select {
+	case <-owned.closedCh:
+	case <-time.After(time.Second):
+		t.Fatal("operation-owned SFTP connection was not reaped")
 	}
 }

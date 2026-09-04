@@ -752,7 +752,9 @@ GOOS=windows go build ./...
 ```
 
 For a real SSH/SFTP smoke test there's a docker-compose at
-[`test/smoke/docker-compose.yml`](test/smoke/docker-compose.yml).
+[`test/smoke/docker-compose.yml`](test/smoke/docker-compose.yml). It binds
+only to loopback, disables passwords, and requires the ephemeral SSH key
+described in [`test/smoke/sftp.md`](test/smoke/sftp.md).
 
 ### CI
 

@@ -9,9 +9,11 @@ package sftp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -36,8 +38,9 @@ func joinRemoteRel(root, rel string) string {
 // so each file transfer always finds its parent directory in place.
 //
 // For Upload, localRoot is the source tree and remoteRoot the destination;
-// for Download the roles swap. Symlinks are treated as their targets
-// (followed), matching the file-at-a-time copy's os.Open semantics.
+// for Download the roles swap. Directory uploads reject symlinks and all
+// local tree access is rooted so concurrent link swaps cannot escape the
+// selected directory.
 func (m *Manager) StartTree(c *pkgsftp.Client, dir Direction, localRoot, remoteRoot string) (int, error) {
 	return m.startTree(c, dir, localRoot, remoteRoot, nil)
 }
@@ -74,8 +77,49 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 	}()
 
 	var transfers []*Transfer
-	enqueue := func(d Direction, local, remote string) error {
-		t, err := m.enqueue(c, d, local, remote, nil)
+	baseCtx := m.lifetime
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	scanCtx, cancelScan := context.WithTimeout(baseCtx, maxTreeScanDuration)
+	defer cancelScan()
+	treeClient := c
+	var treeConn dedicatedConn
+	treeConnHandedOff := false
+	defer func() {
+		if treeConn != nil && !treeConnHandedOff {
+			_ = treeConn.Close()
+		}
+	}()
+	if m.openDedicated != nil {
+		var err error
+		treeConn, err = m.openDedicated()
+		if err != nil {
+			return 0, err
+		}
+		if treeConn == nil {
+			return 0, errors.New("opening operation-owned SFTP session returned nil")
+		}
+		treeClient = treeConn.SFTP()
+	}
+	// Production tree operations own one SFTP transport. If the scan deadline
+	// expires while a server withholds a Mkdir response, closing that transport
+	// interrupts the call; after enumeration completes, the timer is disarmed
+	// and the same transport remains alive until its file transfers settle.
+	var stopScanClose func() bool
+	if treeConn != nil {
+		stopScanClose = context.AfterFunc(scanCtx, func() { _ = treeConn.Close() })
+		defer stopScanClose()
+	}
+	var rootedLocal *os.Root
+	rootHandedOff := false
+	defer func() {
+		if rootedLocal != nil && !rootHandedOff {
+			_ = rootedLocal.Close()
+		}
+	}()
+	enqueue := func(d Direction, local, remote, rel string) error {
+		t, err := m.enqueueRooted(treeClient, d, local, remote, nil, rootedLocal, rel, false)
 		if err != nil {
 			return err
 		}
@@ -86,43 +130,88 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 	var walkErr error
 	switch dir {
 	case Upload:
-		if err := m.contextErr(); err != nil {
+		var err error
+		rootedLocal, err = openSecureLocalRoot(localRoot)
+		if err != nil {
 			return 0, err
 		}
-		if err := c.MkdirAll(remoteRoot); err != nil {
+		if err := treeClient.MkdirAll(remoteRoot); err != nil {
 			return 0, err
 		}
-		walkErr = filepath.WalkDir(localRoot, func(path string, d fs.DirEntry, err error) error {
-			if cancelErr := m.contextErr(); cancelErr != nil {
+		visited := 0
+		walkErr = fs.WalkDir(rootedLocal.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+			if cancelErr := scanCtx.Err(); cancelErr != nil {
 				return cancelErr
 			}
 			if err != nil {
 				return err
 			}
-			rel, rerr := filepath.Rel(localRoot, path)
-			if rerr != nil {
-				return rerr
-			}
 			if rel == "." {
 				return nil // root already created above.
 			}
+			visited++
+			if visited > maxTreeEntries {
+				return fmt.Errorf("%w: more than %d entries", ErrRemoteTreeLimit, maxTreeEntries)
+			}
+			if depth := strings.Count(rel, "/") + 1; depth > maxTreeDepth {
+				return fmt.Errorf("%w: depth exceeds %d", ErrRemoteTreeLimit, maxTreeDepth)
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%w: %s", ErrUnsafeLocalLink, rel)
+			}
 			remotePath := joinRemoteRel(remoteRoot, rel)
 			if d.IsDir() {
-				return c.MkdirAll(remotePath)
+				return treeClient.MkdirAll(remotePath)
 			}
-			return enqueue(Upload, path, remotePath)
+			info, statErr := rootedLocal.Lstat(filepath.FromSlash(rel))
+			if statErr != nil {
+				return statErr
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%w: %s", ErrUnsafeLocalLink, rel)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("unsupported non-regular upload entry: %s", rel)
+			}
+			localPath := filepath.Join(localRoot, filepath.FromSlash(rel))
+			return enqueue(Upload, localPath, remotePath, filepath.FromSlash(rel))
 		})
 	case Download:
-		if err := os.MkdirAll(localRoot, 0o755); err != nil {
+		var err error
+		destinationParent := filepath.Dir(localRoot)
+		destinationBase := filepath.Base(localRoot)
+		parentRoot, err := openSecureLocalRoot(destinationParent)
+		if err != nil {
 			return 0, err
 		}
-		walkErr = walkRemote(m.lifetime, c, remoteRoot, func(remotePath string, isDir bool) error {
-			rel := strings.TrimPrefix(strings.TrimPrefix(remotePath, remoteRoot), "/")
-			localPath := filepath.Join(localRoot, filepath.FromSlash(rel))
+		if err := parentRoot.MkdirAll(destinationBase, 0o755); err != nil {
+			_ = parentRoot.Close()
+			return 0, err
+		}
+		if info, err := parentRoot.Lstat(destinationBase); err != nil {
+			_ = parentRoot.Close()
+			return 0, err
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			_ = parentRoot.Close()
+			return 0, fmt.Errorf("%w: %s", ErrUnsafeLocalLink, localRoot)
+		}
+		if err := parentRoot.Close(); err != nil {
+			return 0, err
+		}
+		// Anchor subsequent work at the selected destination itself, not its
+		// parent. A relative link such as destination/.ssh -> ../.ssh would stay
+		// inside the parent root while still escaping the selected tree.
+		rootedLocal, err = openSecureLocalRoot(localRoot)
+		if err != nil {
+			return 0, err
+		}
+		walkErr = walkRemote(scanCtx, m.remoteDirectoryReader(c), remoteRoot, func(rel, remotePath string, isDir bool) error {
+			localRel := filepath.FromSlash(rel)
+			localPath := filepath.Join(localRoot, localRel)
 			if isDir {
-				return os.MkdirAll(localPath, 0o755)
+				return rootedLocal.MkdirAll(localRel, 0o755)
 			}
-			return enqueue(Download, localPath, remotePath)
+			return enqueue(Download, localPath, remotePath, localRel)
 		})
 	}
 
@@ -132,8 +221,13 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 	if walkErr != nil {
 		removeSourceTree = nil
 	}
+	if stopScanClose != nil {
+		stopScanClose()
+	}
 	m.wg.Add(1)
-	go m.finishTree(transfers, removeSourceTree, treeKey)
+	go m.finishTree(transfers, removeSourceTree, treeKey, rootedLocal, treeConn)
+	rootHandedOff = true
+	treeConnHandedOff = true
 	claimHandedOff = true
 	return len(transfers), walkErr
 }
@@ -142,7 +236,7 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 // state, releases its root destination claim, and for a move deletes the
 // source only if every copy succeeded. It is tracked by m.wg so browser
 // teardown waits for both transfer completion and the optional deletion.
-func (m *Manager) finishTree(transfers []*Transfer, removeSourceTree func() error, treeKey string) {
+func (m *Manager) finishTree(transfers []*Transfer, removeSourceTree func() error, treeKey string, rootedLocal *os.Root, treeConn dedicatedConn) {
 	defer m.wg.Done()
 	defer m.releaseTreeDestination(treeKey)
 	allDone := true
@@ -152,43 +246,91 @@ func (m *Manager) finishTree(transfers []*Transfer, removeSourceTree func() erro
 			allDone = false
 		}
 	}
+	if rootedLocal != nil {
+		_ = rootedLocal.Close()
+	}
+	if treeConn != nil {
+		_ = treeConn.Close()
+	}
 	if allDone && removeSourceTree != nil {
 		_ = removeSourceTree() // best effort: the copy already succeeded.
 	}
 }
 
-// walkRemote recurses a remote directory depth-first, invoking fn for
-// every entry (directories before their contents) so callers can create
-// the destination directory before the files that land inside it. A
-// ReadDir error aborts the walk and propagates.
-func walkRemote(ctx context.Context, c *pkgsftp.Client, root string, fn func(path string, isDir bool) error) error {
-	if ctx != nil {
+type remoteDirectoryReader func(context.Context, string) (remoteDirectory, error)
+
+func (m *Manager) remoteDirectoryReader(c *pkgsftp.Client) remoteDirectoryReader {
+	if m.readRemoteDirectory != nil {
+		return m.readRemoteDirectory
+	}
+	return func(ctx context.Context, remotePath string) (remoteDirectory, error) {
+		entries, err := c.ReadDirContext(ctx, remotePath)
+		if err != nil {
+			return remoteDirectory{}, err
+		}
+		return sanitizeRemoteDirectory(entries, false), nil
+	}
+}
+
+// walkRemote uses an explicit stack and finite entry, directory, depth, and
+// time budgets. That keeps attacker-controlled hierarchy depth off the Go
+// call stack and makes every production ReadDir cancellable and byte-bounded.
+func walkRemote(ctx context.Context, readDir remoteDirectoryReader, root string, fn func(rel, remotePath string, isDir bool) error) error {
+	type pendingDir struct {
+		remotePath string
+		rel        string
+		depth      int
+	}
+	stack := []pendingDir{{remotePath: root}}
+	entriesSeen, directoriesSeen := 0, 0
+	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-	}
-	entries, err := c.ReadDir(root)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if ctx != nil {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		directoriesSeen++
+		if directoriesSeen > maxTreeDirectories {
+			return fmt.Errorf("%w: more than %d directories", ErrRemoteTreeLimit, maxTreeDirectories)
+		}
+		directory, err := readDir(ctx, current.remotePath)
+		if err != nil {
+			return err
+		}
+		if err := directory.transferError(current.remotePath); err != nil {
+			return err
+		}
+		for _, entry := range directory.entries {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-		}
-		path := joinRemote(root, e.Name())
-		if e.IsDir() {
-			if err := fn(path, true); err != nil {
+			entriesSeen++
+			if entriesSeen > maxTreeEntries {
+				return fmt.Errorf("%w: more than %d entries", ErrRemoteTreeLimit, maxTreeEntries)
+			}
+			name := entry.Name()
+			if err := validateRemoteEntryName(name); err != nil {
 				return err
 			}
-			if err := walkRemote(ctx, c, path, fn); err != nil {
+			childRel := name
+			if current.rel != "" {
+				childRel = path.Join(current.rel, name)
+			}
+			childRemote := joinRemote(current.remotePath, name)
+			if entry.IsDir() {
+				depth := current.depth + 1
+				if depth > maxTreeDepth {
+					return fmt.Errorf("%w: depth exceeds %d", ErrRemoteTreeLimit, maxTreeDepth)
+				}
+				if err := fn(childRel, childRemote, true); err != nil {
+					return err
+				}
+				stack = append(stack, pendingDir{remotePath: childRemote, rel: childRel, depth: depth})
+				continue
+			}
+			if err := fn(childRel, childRemote, false); err != nil {
 				return err
 			}
-			continue
-		}
-		if err := fn(path, false); err != nil {
-			return err
 		}
 	}
 	return nil

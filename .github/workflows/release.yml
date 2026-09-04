@@ -5,13 +5,10 @@ on:
     tags:
       - 'v*'
 
-# softprops/action-gh-release uploads assets to the GitHub release,
-# which requires write access to repo contents. Everything else this
-# workflow does (checkout, build, syft) only needs read, but the
-# upload step forces the wider scope. Pinning it explicitly keeps
-# the token from inheriting anything broader from repo/org defaults.
+# Every job starts read-only. Only assemble-release receives release-write
+# authority, after all untrusted build and verification jobs have finished.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # The verify-* jobs mirror ci.yml so the release gate fails on the
@@ -27,8 +24,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - run: go build ./...
@@ -38,8 +35,8 @@ jobs:
   verify-race:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
       - run: go test -race ./...
@@ -47,8 +44,8 @@ jobs:
   verify-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -63,7 +60,7 @@ jobs:
           fi
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
         with:
           version: v2.12.2
 
@@ -72,7 +69,7 @@ jobs:
     steps:
       # govulncheck-action handles checkout + Go install internally.
       - name: govulncheck
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
         with:
           go-version-file: go.mod
           go-package: ./...
@@ -95,8 +92,8 @@ jobs:
           - { os: darwin,  arch: arm64 }
           - { os: windows, arch: amd64 }
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -115,7 +112,7 @@ jobs:
       # so it can produce a single checksums.txt that covers the full
       # set (and so the release stays empty if any platform fails).
       - name: Stage binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: binary-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
@@ -126,19 +123,21 @@ jobs:
     name: assemble release
     needs: build-binaries
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # SBOM is generated from the source tree (go.mod/go.sum drive the
       # Go module catalogue). Done before downloading binaries so syft
       # doesn't try to introspect them as separate artifacts.
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
       - name: Generate SBOM
         run: syft scan dir:. -o spdx-json=fvmux.spdx.json
 
       - name: Collect binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           pattern: binary-*
@@ -163,6 +162,6 @@ jobs:
           cat checksums.txt
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*

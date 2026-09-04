@@ -33,6 +33,11 @@ type Client struct {
 	out       io.ReadCloser
 	stderr    *bytes.Buffer
 	closeOnce sync.Once
+
+	alias       string
+	controlPath string
+	hostOpts    []string
+	dirSem      chan struct{}
 }
 
 // Open spawns ssh and negotiates an SFTP session against alias.
@@ -58,6 +63,11 @@ func Open(alias, controlPath string, hostOpts []string) (*Client, error) {
 // lets the owning workspace/session prevent a late browser from appearing
 // after it has already been closed or replaced.
 func OpenContext(ctx context.Context, alias, controlPath string, hostOpts []string) (*Client, error) {
+	c, _, err := openContext(ctx, alias, controlPath, hostOpts, 0)
+	return c, err
+}
+
+func openContext(ctx context.Context, alias, controlPath string, hostOpts []string, readBudget int64) (*Client, *byteBudgetReader, error) {
 	args := []string{}
 	args = append(args, sshmgr.ControlOpts(controlPath)...)
 	args = append(args, hostOpts...)
@@ -67,11 +77,11 @@ func OpenContext(ctx context.Context, alias, controlPath string, hostOpts []stri
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ssh stdin: %w", err)
+		return nil, nil, fmt.Errorf("ssh stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ssh stdout: %w", err)
+		return nil, nil, fmt.Errorf("ssh stdout: %w", err)
 	}
 	// Capture stderr so an early auth failure surfaces in the dialog
 	// instead of going to fvmux's outer terminal.
@@ -79,18 +89,28 @@ func OpenContext(ctx context.Context, alias, controlPath string, hostOpts []stri
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("ssh start: %w", err)
+		return nil, nil, fmt.Errorf("ssh start: %w", err)
 	}
-	sc, err := pkgsftp.NewClientPipe(stdout, stdin)
+	var reader io.Reader = stdout
+	var budget *byteBudgetReader
+	if readBudget > 0 {
+		budget = &byteBudgetReader{r: stdout, remaining: readBudget}
+		reader = budget
+	}
+	sc, err := pkgsftp.NewClientPipe(reader, stdin)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return nil, budget, ctxErr
 		}
-		return nil, classifyOpenError(alias, err, stderr.String())
+		return nil, budget, classifyOpenError(alias, err, stderr.String())
 	}
-	return &Client{cmd: cmd, sftp: sc, in: stdin, out: stdout, stderr: &stderr}, nil
+	return &Client{
+		cmd: cmd, sftp: sc, in: stdin, out: stdout, stderr: &stderr,
+		alias: alias, controlPath: controlPath, hostOpts: append([]string(nil), hostOpts...),
+		dirSem: make(chan struct{}, maxConcurrentDirectoryReads),
+	}, budget, nil
 }
 
 // classifyOpenError turns ssh's stderr blob into a friendlier error

@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -32,6 +33,12 @@ import (
 // image extension doesn't lock up the dialog.
 const maxImageBytes = 8 * 1024 * 1024
 
+const (
+	maxImageDimension     = 16384
+	maxDecodedImageBytes  = 64 << 20
+	maxImageBytesPerPixel = 8
+)
+
 // BuildPreview reads enough of path over the SFTP client to classify it,
 // then returns the preview widget sized to bounds. See buildPreview for
 // the classification and fallback rules.
@@ -48,8 +55,9 @@ func BuildPreview(s *pkgsftp.Client, path string, bounds geom.Rect) views.View {
 //   - binary / image-but-too-big       → HexEditor on first 64 KiB.
 //   - everything else                  → MarkdownView fenced as `text`.
 //
-// open yields a fresh reader over the file each call — once to sniff, and
-// again to decode an image (image.Decode must start at byte 0). It is the
+// open yields a fresh reader over the file each call. Images are read once
+// into a bounded byte snapshot, then configuration and pixels are decoded
+// from that same snapshot so a remote file cannot change between checks. It is the
 // only thing that differs between the remote (s.Open) and local (os.Open)
 // entry points. On any open error the result is a MarkdownView "# Error"
 // block so the user sees what went wrong instead of a blank pane.
@@ -98,8 +106,10 @@ func buildPreview(path string, bounds geom.Rect, open func() (io.ReadCloser, err
 	}
 }
 
-// decodeImage attempts a full image decode from a fresh reader. Caps the
-// read at maxImageBytes so a misclassified large file doesn't hang.
+// decodeImage reads one bounded encoded snapshot, validates dimensions through
+// DecodeConfig, then decodes pixels from the same bytes. The encoded-byte and decoded-pixel budgets
+// are independent: compact images may otherwise declare enough pixels to
+// exhaust the process before the decoder can return an error.
 // Returns nil on failure — including a panicking decoder — so the caller
 // falls back to hex: the hex view renders any bytes safely, which is the
 // right degradation for an image a decoder chokes on.
@@ -115,13 +125,34 @@ func decodeImage(open func() (io.ReadCloser, error), bounds geom.Rect) (v views.
 		return nil
 	}
 	defer func() { _ = f.Close() }()
-	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
+	encoded, readErr := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
+	_ = f.Close()
+	if readErr != nil || len(encoded) > maxImageBytes {
+		return nil
+	}
+	config, _, configErr := image.DecodeConfig(bytes.NewReader(encoded))
+	if configErr != nil || !imageDimensionsAllowed(config.Width, config.Height) {
+		return nil
+	}
+	img, _, err := image.Decode(bytes.NewReader(encoded))
 	if err != nil {
+		return nil
+	}
+	decoded := img.Bounds()
+	if !imageDimensionsAllowed(decoded.Dx(), decoded.Dy()) {
 		return nil
 	}
 	iv := imageview.New(bounds)
 	iv.SetImage(img)
 	return iv
+}
+
+func imageDimensionsAllowed(width, height int) bool {
+	if width <= 0 || height <= 0 || width > maxImageDimension || height > maxImageDimension {
+		return false
+	}
+	maxPixels := maxDecodedImageBytes / maxImageBytesPerPixel
+	return int64(width) <= int64(maxPixels)/int64(height)
 }
 
 func hexPreview(buf []byte, bounds geom.Rect) views.View {
