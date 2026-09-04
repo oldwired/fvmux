@@ -238,6 +238,9 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdCommandPalette, func() {
 		m.openPalette()
 	})
+	bind(commands.CmdOpenMenu, func() {
+		m.App.PostEvent(drivers.Event{What: consts.EvCommand, Command: consts.CmMenu})
+	})
 	bind(commands.CmdCheatsheet, m.ShowCheatsheet)
 	bind(commands.CmdLiteralPrefix, func() {
 		// Derive the byte from the live spec — after a rebind to Ctrl-B
@@ -830,7 +833,6 @@ func (m *Mux) LiteralForward(b byte) {
 func (m *Mux) InstallPrefixListener() {
 	spec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
 	m.prefix = prefix.New(m.Reg, &commands.Ctx{App: m.App}, spec)
-	m.prefix.OnTriplePress = func() { m.RunFirstRunWizard() }
 	m.prefix.OnUnknown = func(chord string) {
 		m.setFlash("Unknown command: "+chord, 1800*time.Millisecond, flashPrioCommand)
 		m.refreshStatusBar()
@@ -1194,21 +1196,25 @@ func (m *Mux) activeWindowKey() views.View {
 	return nil
 }
 
-// focusWindowView is the single point that updates desktop focus.
-// Records the previous focus into m.lastFocused so the Ctrl-G Tab
-// MRU toggle has something to swap back to. Refreshes the status bar.
+// focusWindowView is the single point that activates a desktop window.
+// It raises the target as well as moving keyboard focus: Group.Focus alone
+// intentionally leaves z-order unchanged, which can focus an obscured window.
+// Records the previous focus into m.lastFocused so the Ctrl-G Tab MRU toggle
+// has something to swap back to. Refreshes the status bar.
 func (m *Mux) focusWindowView(target views.View) {
 	if target == nil {
 		return
 	}
 	cur := m.App.Desktop.Current()
-	if cur == target {
-		return
-	}
-	if m.workspaceWindowExists(cur) {
+	if cur != target && m.workspaceWindowExists(cur) {
 		m.lastFocused = cur
 	}
+	// MakeFirst is a no-op when target is already topmost, so Focus must remain
+	// explicit. Re-raise the transparent mouse listener afterward; it needs to
+	// receive clicks before windows but must never become the focused child.
+	m.App.Desktop.MakeFirst(target)
 	m.App.Desktop.Focus(target)
+	m.raiseMouseListener()
 	m.refreshStatusBar()
 }
 

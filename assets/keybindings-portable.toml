@@ -1,0 +1,73 @@
+# fvmux layout-portable key binding preset.
+#
+# Copy the entries you want into ~/.config/fvmux/keybindings.toml, then run
+# `fvmux --check-config` and reload from Help → Reload Config.
+#
+# These bindings use letters rather than punctuation-heavy tmux positions.
+# fvmux matches the logical character produced by the keyboard layout, not a
+# physical key position. Each override MOVES the command's one binding; it
+# does not add a second alias.
+
+[[binding]]
+chord = "<prefix> a"
+command = "Kill Window"
+
+[[binding]]
+chord = "<prefix> b"
+command = "Split Left/Right"
+
+[[binding]]
+chord = "<prefix> d"
+command = "Split Top/Bottom"
+
+[[binding]]
+chord = "<prefix> e"
+command = "Swap with Next"
+
+[[binding]]
+chord = "<prefix> i"
+command = "Swap with Prev"
+
+[[binding]]
+chord = "<prefix> u"
+command = "Break Out to Window"
+
+[[binding]]
+chord = "<prefix> y"
+command = "Enter Copy Mode"
+
+[[binding]]
+chord = "<prefix> A"
+command = "Paste"
+
+[[binding]]
+chord = "<prefix> E"
+command = "Find in Scrollback"
+
+[[binding]]
+chord = "<prefix> I"
+command = "Toggle Sync-Input (broadcast)"
+
+[[binding]]
+chord = "<prefix> J"
+command = "Join from Window…"
+
+[[binding]]
+chord = "<prefix> M"
+command = "Rename Session…"
+
+[[binding]]
+chord = "<prefix> N"
+command = "Run Command…"
+
+[[binding]]
+chord = "<prefix> O"
+command = "Cheatsheet"
+
+[[binding]]
+chord = "<prefix> Q"
+command = "Focus Previous Pane"
+
+[[binding]]
+chord = "<prefix> U"
+command = "Rename Window…"

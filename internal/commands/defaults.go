@@ -98,6 +98,7 @@ func Defaults() *Registry {
 		Category:  "Help",
 		Name:      "Reset First-Run Wizard…",
 		MenuLabel: "~R~eset First-Run Wizard…",
+		Chord:     "C-g W",
 	})
 	r.Register(&Command{
 		ID:        CmdReloadConfig,
@@ -133,6 +134,7 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdToggleClock, Category: "View", Name: "Toggle Clock", MenuLabel: "Toggle ~C~lock", Chord: "C-g t"})
 	r.Register(&Command{ID: CmdToggleStatusBar, Category: "View", Name: "Toggle Status Bar", MenuLabel: "Toggle ~S~tatus Bar"})
 	r.Register(&Command{ID: CmdToggleMenuBar, Category: "View", Name: "Toggle Menu Bar", MenuLabel: "Toggle ~M~enu Bar"})
+	r.Register(&Command{ID: CmdOpenMenu, Category: "View", Name: "Activate Menu Bar", Chord: "C-g m"})
 	r.Register(&Command{ID: CmdRedraw, Category: "View", Name: "Redraw", MenuLabel: "~R~edraw", Chord: "C-g r"})
 	r.Register(&Command{ID: CmdFlashNumbers, Category: "View", Name: "Flash Window Numbers", MenuLabel: "Flash Window ~N~umbers", Chord: "C-g q"})
 

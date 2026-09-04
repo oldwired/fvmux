@@ -3,6 +3,7 @@ package cheatsheet
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oldwired/fvmux/internal/commands"
@@ -13,14 +14,27 @@ import (
 // checked-in bytes exactly. GenerateBaked is deterministic (no dated
 // tagline), so a mismatch means the asset is stale.
 func TestBakedCheatsheetInSync(t *testing.T) {
-	path := filepath.Join("..", "..", "assets", "cheatsheet.md")
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
 	got := GenerateBaked(commands.Defaults())
-	if got != string(want) {
-		t.Errorf("assets/cheatsheet.md is stale — run `go generate ./internal/cheatsheet`")
+	for _, path := range []string{
+		filepath.Join("..", "..", "assets", "cheatsheet.md"),
+		filepath.Join("..", "..", "KEYBINDINGS.md"),
+	} {
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		if got != string(want) {
+			t.Errorf("%s is stale — run `go generate ./internal/cheatsheet`", path)
+		}
+	}
+}
+
+func TestGenerateUsesActivePrefixInContextualHelp(t *testing.T) {
+	reg := commands.Defaults()
+	reg.RebindPrefix("C-g", "C-b")
+	got := GenerateBaked(reg)
+	if !strings.Contains(got, "**C-b m**") || strings.Contains(got, "**C-g m**") {
+		t.Fatalf("contextual help did not render the active prefix")
 	}
 }
 

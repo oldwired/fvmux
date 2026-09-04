@@ -53,6 +53,9 @@ func run() error {
 		}
 	}
 	paths := config.Default().WithRoot(f.Config)
+	if f.CheckConfig {
+		return checkConfig(paths, os.Stdout)
+	}
 	if err := paths.EnsureDirs(); err != nil {
 		return fmt.Errorf("ensuring config dirs: %w", err)
 	}
@@ -95,24 +98,35 @@ func run() error {
 		fmt.Fprintln(os.Stderr, "fvmux: warning loading profiles (using defaults):", err)
 	}
 
-	a, err := fvapp.NewApplication()
-	if err != nil {
-		return err
-	}
-	defer a.Done()
-
-	cols, rows := a.BaseView().Size.X, a.BaseView().Size.Y
 	reg := commands.Defaults()
+	prefixSpec := prefix.Lookup(cfg.General.PrefixKey)
+	if pk := cfg.General.PrefixKey; pk != "" && pk != prefixSpec.ConfigKey {
+		slog.Warn("unrecognised prefix_key, using default",
+			"prefix_key", pk, "using", prefixSpec.ConfigKey)
+	}
 	// Apply user overrides from keybindings.toml FIRST, while the registry
 	// is still in the default "C-g" prefix space — keybindings.toml chords
-	// are authored against the default prefix (the template uses "C-g X").
-	// Empty / missing file is fine; bad entries are skipped silently.
-	if overrides, rejected, err := config.LoadKeybindings(paths.KeybindingsFile()); err == nil {
+	// are normalized into factory space (the template recommends
+	// "<prefix> X"). Do this before terminal initialization so a concise
+	// diagnostic summary remains visible in the user's shell.
+	// Empty / missing file is fine; invalid entries are skipped with
+	// structured diagnostics while valid entries remain usable.
+	if overrides, diagnostics, err := config.LoadKeybindings(paths.KeybindingsFile(), prefixSpec.ChordToken); err == nil {
 		if len(overrides) > 0 {
-			reg.ApplyOverrides(overrides)
+			diagnostics = append(diagnostics, reg.ApplyOverrides(overrides)...)
 		}
-		for _, r := range rejected {
-			slog.Warn("keybindings.toml binding skipped", "binding", r)
+		errors, warnings := 0, 0
+		for _, diagnostic := range diagnostics {
+			if diagnostic.Severity == "error" {
+				errors++
+				slog.Error("keybindings.toml", "diagnostic", diagnostic.String())
+			} else {
+				warnings++
+				slog.Warn("keybindings.toml", "diagnostic", diagnostic.String())
+			}
+		}
+		if errors+warnings > 0 {
+			fmt.Fprintf(os.Stderr, "fvmux: keybindings.toml: %d error(s), %d warning(s); full details are available in the log viewer\n", errors, warnings)
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "fvmux: warning loading keybindings:", err)
@@ -124,14 +138,17 @@ func run() error {
 	// unlisted prefix_key ("C-x", "ctrl-b") must fall back to the default
 	// for the chords AND the listener together, or every prefix binding
 	// goes dead at startup.
-	prefixSpec := prefix.Lookup(cfg.General.PrefixKey)
-	if pk := cfg.General.PrefixKey; pk != "" && pk != prefixSpec.ConfigKey {
-		slog.Warn("unrecognised prefix_key, using default",
-			"prefix_key", pk, "using", prefixSpec.ConfigKey)
-	}
 	if prefixSpec.ChordToken != "C-g" {
 		reg.RebindPrefix("C-g", prefixSpec.ChordToken)
 	}
+
+	a, err := fvapp.NewApplication()
+	if err != nil {
+		return err
+	}
+	defer a.Done()
+
+	cols, rows := a.BaseView().Size.X, a.BaseView().Size.Y
 	var mux *muxapp.Mux // captured by the rebuild closure; assigned below.
 	rebuildMenu := func() {
 		var extras menus.Extras

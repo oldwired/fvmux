@@ -2,14 +2,12 @@ package config
 
 import (
 	"errors"
-	"fmt"
 	"os"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/oldwired/fvmux/internal/commands"
 	"github.com/oldwired/fvmux/internal/keys"
-	"github.com/oldwired/fvmux/internal/prefix"
 )
 
 // keybindingsFile is the on-disk shape of ~/.config/fvmux/keybindings.toml.
@@ -29,12 +27,10 @@ type bindingTOML struct {
 // with no overrides (leaving the user's file intact to fix) rather than
 // applying a partial set.
 //
-// rejected lists bindings whose chord the prefix dispatcher can never
-// emit (arrows, F-keys, A-/S- modifiers, wrong step count). They are
-// NOT applied — applying one would strip the command's factory chord
-// while the replacement never fires, leaving the command unreachable —
-// and callers must surface them to the user.
-func LoadKeybindings(path string) (overrides []commands.Override, rejected []string, err error) {
+// diagnostics contains syntax/reachability errors and portability warnings.
+// Invalid entries are never returned as overrides, so applying the valid
+// subset cannot accidentally strip a command's working factory chord.
+func LoadKeybindings(path, activePrefix string) (overrides []commands.Override, diagnostics []commands.BindingDiagnostic, err error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -47,23 +43,27 @@ func LoadKeybindings(path string) (overrides []commands.Override, rejected []str
 		return nil, nil, err
 	}
 	overrides = make([]commands.Override, 0, len(f.Bindings))
-	for _, b := range f.Bindings {
-		// Canonicalise so "c-g tab" / "C-g Tab" both match the
-		// registry's binding form regardless of how the user spelled
-		// it. (Chords stay in the default-prefix space; a non-default
-		// prefix is applied afterwards — see main.go.)
-		chord := keys.Canonical(b.Chord)
-		// Removal entries (command = "") are exempt: they only ever
-		// delete an existing binding, so an odd chord is a no-op.
-		if b.Command != "" && !prefix.DispatchableChord(chord) {
-			rejected = append(rejected,
-				fmt.Sprintf("%s → %s (chords must start with the default prefix C-g and end with a key the dispatcher can emit)", b.Chord, b.Command))
+	for i, b := range f.Bindings {
+		index := i + 1
+		chord, keyDiagnostics := keys.ValidateBindingChord(b.Chord, activePrefix)
+		invalid := false
+		for _, d := range keyDiagnostics {
+			diagnostics = append(diagnostics, commands.BindingDiagnostic{
+				Severity: string(d.Severity), Index: index, Chord: b.Chord,
+				Command: b.Command, Reason: d.Reason,
+			})
+			if d.Severity == keys.SeverityError {
+				invalid = true
+			}
+		}
+		if invalid {
 			continue
 		}
 		overrides = append(overrides, commands.Override{
+			Index:   index,
 			Chord:   chord,
 			Command: b.Command,
 		})
 	}
-	return overrides, rejected, nil
+	return overrides, diagnostics, nil
 }

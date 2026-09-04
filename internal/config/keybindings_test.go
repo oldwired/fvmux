@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/keys"
 )
 
 func writeKeybindings(t *testing.T, body string) string {
@@ -19,161 +20,162 @@ func writeKeybindings(t *testing.T, body string) string {
 	return path
 }
 
-// TestLoadKeybindings_RejectsUndispatchableBoundChords is the regression for
-// finding #20 (rejection direction): a binding whose chord the prefix
-// dispatcher can never emit (arrows, F-keys, S-/A- modified steps) must be
-// reported in `rejected` — carrying the command name — and must NOT enter
-// overrides. Applying the (empty) overrides to a factory registry then leaves
-// each target command's factory chord intact, proving the rejection never
-// strips a live binding.
-func TestLoadKeybindings_RejectsUndispatchableBoundChords(t *testing.T) {
+func TestLoadKeybindingsAcceptsEffectiveKeySurface(t *testing.T) {
 	path := writeKeybindings(t, `
 [[binding]]
-chord = "C-g Left"
+chord = "<prefix> Left"
 command = "Kill Pane"
 
 [[binding]]
-chord = "C-g F5"
+chord = "C-g A-F5"
 command = "Zoom Focused Pane"
 
 [[binding]]
-chord = "C-g S-Tab"
-command = "New Window"
-`)
-	overrides, rejected, err := LoadKeybindings(path)
-	if err != nil {
-		t.Fatalf("LoadKeybindings: %v", err)
-	}
-	if len(overrides) != 0 {
-		t.Fatalf("undispatchable bound chords must not enter overrides; got %d: %+v", len(overrides), overrides)
-	}
-	if len(rejected) != 3 {
-		t.Fatalf("expected 3 rejected bindings, got %d: %v", len(rejected), rejected)
-	}
-	for _, want := range []string{"Kill Pane", "Zoom Focused Pane", "New Window"} {
-		found := false
-		for _, r := range rejected {
-			if strings.Contains(r, want) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("rejected slice missing command name %q: %v", want, rejected)
-		}
-	}
-
-	// Apply the (empty) overrides to a factory registry: because the rejected
-	// bindings were never applied, each target command's factory chord still
-	// resolves through LookupChord.
-	reg := commands.Defaults()
-	reg.ApplyOverrides(overrides)
-	for chord, name := range map[string]string{
-		"C-g x": "Kill Pane",
-		"C-g z": "Zoom Focused Pane",
-		"C-g c": "New Window",
-	} {
-		c := reg.LookupChord(chord)
-		if c == nil {
-			t.Errorf("factory chord %q was stripped; LookupChord returned nil", chord)
-			continue
-		}
-		if c.Name != name {
-			t.Errorf("chord %q resolves to %q, want %q", chord, c.Name, name)
-		}
-	}
-}
-
-// TestLoadKeybindings_RemovalWithUndispatchableChordAccepted verifies the
-// removal exemption: a `command = ""` entry only ever deletes an existing
-// binding, so an undispatchable chord is a harmless no-op and must NOT be
-// rejected — it flows into overrides as a removal.
-func TestLoadKeybindings_RemovalWithUndispatchableChordAccepted(t *testing.T) {
-	path := writeKeybindings(t, `
-[[binding]]
-chord = "C-g Left"
-command = ""
-`)
-	overrides, rejected, err := LoadKeybindings(path)
-	if err != nil {
-		t.Fatalf("LoadKeybindings: %v", err)
-	}
-	if len(rejected) != 0 {
-		t.Fatalf("a removal entry must never be rejected; got %v", rejected)
-	}
-	if len(overrides) != 1 {
-		t.Fatalf("removal entry should produce exactly one override, got %d: %+v", len(overrides), overrides)
-	}
-	if overrides[0].Command != "" {
-		t.Errorf("removal override Command = %q, want empty", overrides[0].Command)
-	}
-	if overrides[0].Chord != "C-g Left" {
-		t.Errorf("removal override Chord = %q, want %q", overrides[0].Chord, "C-g Left")
-	}
-}
-
-// TestLoadKeybindings_AcceptsDispatchableChords guards the accept side: chords
-// the dispatcher CAN emit (a named special atom, a bare digit, a Ctrl-letter
-// step, Tab) must pass through into overrides with nothing rejected.
-func TestLoadKeybindings_AcceptsDispatchableChords(t *testing.T) {
-	path := writeKeybindings(t, `
-[[binding]]
-chord = "C-g Space"
-command = "Kill Pane"
-
-[[binding]]
-chord = "C-g 5"
-command = "Zoom Focused Pane"
-
-[[binding]]
-chord = "C-g C-c"
+chord = "C-b C-Space"
 command = "New Window"
 
 [[binding]]
-chord = "C-g Tab"
+chord = "<prefix> 界"
 command = "Next Window"
 `)
-	overrides, rejected, err := LoadKeybindings(path)
+	overrides, diagnostics, err := LoadKeybindings(path, "C-b")
 	if err != nil {
-		t.Fatalf("LoadKeybindings: %v", err)
-	}
-	if len(rejected) != 0 {
-		t.Fatalf("dispatchable chords must not be rejected; got %v", rejected)
+		t.Fatal(err)
 	}
 	if len(overrides) != 4 {
-		t.Fatalf("expected 4 accepted overrides, got %d: %+v", len(overrides), overrides)
+		t.Fatalf("got %d overrides, want 4: %+v", len(overrides), overrides)
+	}
+	for _, override := range overrides {
+		if !strings.HasPrefix(override.Chord, "C-g ") {
+			t.Errorf("override was not normalized to factory prefix: %+v", override)
+		}
+	}
+	if len(diagnostics) != 1 || diagnostics[0].Severity != "warning" {
+		t.Fatalf("Alt binding should produce one portability warning: %+v", diagnostics)
 	}
 }
 
-// TestLoadKeybindings_RejectsForeignPrefixStep guards the first-step
-// rule: overrides are authored in the default C-g space (and rebound
-// afterwards), so a chord led by any other token ("C-x a") would apply,
-// strip the factory chord, and never fire. It must be rejected with the
-// factory binding left intact.
-func TestLoadKeybindings_RejectsForeignPrefixStep(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keybindings.toml")
-	body := `
+func TestLoadKeybindingsRejectsInvalidGrammar(t *testing.T) {
+	path := writeKeybindings(t, `
 [[binding]]
-chord   = "C-x a"
+chord = "C-x a"
 command = "Kill Pane"
-`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+
+[[binding]]
+chord = "<prefix> HyperDrive"
+command = "Zoom Focused Pane"
+
+[[binding]]
+chord = "<prefix> a b"
+command = "New Window"
+`)
+	overrides, diagnostics, err := LoadKeybindings(path, "C-b")
+	if err != nil {
 		t.Fatal(err)
 	}
-	overrides, rejected, err := LoadKeybindings(path)
-	if err != nil {
-		t.Fatalf("LoadKeybindings: %v", err)
-	}
 	if len(overrides) != 0 {
-		t.Fatalf("overrides = %v; want none — C-x a can never be emitted", overrides)
+		t.Fatalf("invalid entries entered overrides: %+v", overrides)
 	}
-	if len(rejected) != 1 || !strings.Contains(rejected[0], "Kill Pane") {
-		t.Fatalf("rejected = %v; want one entry naming Kill Pane", rejected)
+	if len(diagnostics) != 3 {
+		t.Fatalf("got %d diagnostics, want 3: %+v", len(diagnostics), diagnostics)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity != "error" {
+			t.Errorf("invalid entry was not an error: %+v", diagnostic)
+		}
+	}
+}
+
+func TestLoadKeybindingsPrefixSpellingsNormalizeIdentically(t *testing.T) {
+	path := writeKeybindings(t, `
+[[binding]]
+chord = "C-g a"
+command = "Kill Pane"
+
+[[binding]]
+chord = "C-b b"
+command = "Zoom Focused Pane"
+
+[[binding]]
+chord = "<prefix> c"
+command = "New Window"
+`)
+	overrides, diagnostics, err := LoadKeybindings(path, "C-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diagnostics)
+	}
+	want := []string{"C-g a", "C-g b", "C-g c"}
+	for i := range want {
+		if overrides[i].Chord != want[i] {
+			t.Errorf("override %d = %q, want %q", i, overrides[i].Chord, want[i])
+		}
+	}
+}
+
+func TestLoadKeybindingsAliasesCanonicalizeBeforeCollision(t *testing.T) {
+	path := writeKeybindings(t, `
+[[binding]]
+chord = "<prefix> C-i"
+command = "Kill Pane"
+
+[[binding]]
+chord = "<prefix> Tab"
+command = "Zoom Focused Pane"
+`)
+	overrides, diagnostics, err := LoadKeybindings(path, "C-g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics) != 0 {
+		t.Fatalf("unexpected syntax diagnostics: %+v", diagnostics)
+	}
+	if overrides[0].Chord != "C-g Tab" || overrides[1].Chord != "C-g Tab" {
+		t.Fatalf("aliases did not collapse: %+v", overrides)
 	}
 	reg := commands.Defaults()
-	reg.ApplyOverrides(overrides)
-	if reg.LookupChord("C-g x") == nil {
-		t.Fatal("factory chord C-g x must survive a rejected foreign-prefix binding")
+	diagnostics = reg.ApplyOverrides(overrides)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[len(diagnostics)-1].Reason, "collision") {
+		t.Fatalf("collapsed alias collision was not diagnosed: %+v", diagnostics)
+	}
+}
+
+func TestLoadKeybindingsMissingFile(t *testing.T) {
+	overrides, diagnostics, err := LoadKeybindings(filepath.Join(t.TempDir(), "missing.toml"), "C-g")
+	if err != nil || len(overrides) != 0 || len(diagnostics) != 0 {
+		t.Fatalf("missing file = overrides:%v diagnostics:%v err:%v", overrides, diagnostics, err)
+	}
+}
+
+func TestPortablePresetIsValidAndLetterOnly(t *testing.T) {
+	path := filepath.Join("..", "..", "assets", "keybindings-portable.toml")
+	overrides, diagnostics, err := LoadKeybindings(path, "C-g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := commands.Defaults()
+	diagnostics = append(diagnostics, reg.ApplyOverrides(overrides)...)
+	if len(diagnostics) != 0 {
+		t.Fatalf("portable preset diagnostics: %+v", diagnostics)
+	}
+	seen := map[string]bool{}
+	for _, override := range overrides {
+		parsed, err := keys.Parse(override.Chord)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step := parsed.Steps[1]
+		letter := len(step.Atom) == 1 &&
+			((step.Atom[0] >= 'a' && step.Atom[0] <= 'z') ||
+				(step.Atom[0] >= 'A' && step.Atom[0] <= 'Z'))
+		if !letter || step.Ctrl || step.Alt || step.Shift {
+			t.Errorf("portable preset contains non-letter second step: %q", override.Chord)
+		}
+		if seen[override.Chord] {
+			t.Errorf("portable preset duplicates %q", override.Chord)
+		}
+		seen[override.Chord] = true
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	pkgsftp "github.com/pkg/sftp"
 
+	"github.com/oldwired/fvmux/internal/shortcuts"
 	"github.com/oldwired/fvmux/internal/ui"
 )
 
@@ -483,7 +484,7 @@ func buildBrowser(a *fvapp.Application, frame *views.Window, alias, controlPath 
 
 	hint := dialogs.NewStaticText(
 		geom.NewRect(16, h-3, hintX1, h-2),
-		"F5 cp · F6 mv · F7 mkdir · F8 del · Ctrl-R refresh",
+		shortcuts.Compact(shortcuts.ScopeFiles),
 	)
 	// Hint sticks to the bottom row (Y slides with parent) and
 	// stretches horizontally so the full F-key cheat actually
@@ -570,15 +571,7 @@ type previewPane struct {
 
 func newPreviewPane(d *views.Window, c *pkgsftp.Client, bounds geom.Rect) *previewPane {
 	mv := markdown.New(bounds, nil)
-	mv.SetMarkdown("# Files\n\n" +
-		"- **Tab** — switch between the four panes.\n" +
-		"- **Enter** on a folder — change into it.\n" +
-		"- **Enter** on a file — preview it here.\n" +
-		"- **F5** or the **Copy** button — copy the focused listing's selection (file or folder) to the other side.\n" +
-		"- **F6** — move/rename: a bare name renames in place; a path moves it to the other side.\n" +
-		"- **Del** or **Cancel xfer** — cancel the newest in-flight transfer.\n" +
-		"- **Terminal** — return to the matching SSH terminal.\n" +
-		"- **Esc** or **Close** — close this Files window.")
+	mv.SetMarkdown("# Files\n\n" + shortcuts.MarkdownForScope(shortcuts.ScopeFiles, ""))
 	d.Insert(mv)
 	return &previewPane{
 		d: d, c: c, bounds: bounds, current: mv,

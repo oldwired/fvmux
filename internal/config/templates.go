@@ -218,8 +218,10 @@ const templateHosts = `# fvmux additional SSH hosts.
 
 const templateKeybindings = `# fvmux key bindings overrides.
 #
-# Each [[binding]] entry binds a chord to a command (by its display
-# name, exactly as shown in Ctrl-G ? / the palette). Empty command
+# Each [[binding]] entry binds <prefix> plus exactly one key to a
+# command (by its display name, exactly as shown in the cheatsheet /
+# palette). <prefix>, factory C-g, and the currently configured prefix
+# are accepted and normalized. Empty command
 # removes whatever's currently on that chord.
 #
 # Reload after editing via Help → Reload Config (no restart needed).
@@ -227,15 +229,15 @@ const templateKeybindings = `# fvmux key bindings overrides.
 # Examples:
 #
 # [[binding]]
-# chord   = "C-g u"               # bind Ctrl-G u to "Find Window…"
+# chord   = "<prefix> u"          # bind prefix+u to "Find Window…"
 # command = "Find Window…"       # (C-g u is unused by default — uncommenting
 #                                 # an example must never steal a factory chord)
 #
 # [[binding]]
-# chord   = "C-g w"               # unbind the default Ctrl-G w
+# chord   = "<prefix> w"          # unbind the default prefix+w
 # command = ""
 #
 # [[binding]]
-# chord   = "C-g X"               # custom chord for a built-in
+# chord   = "<prefix> X"          # custom chord for a built-in
 # command = "Split Left/Right"
 `

@@ -2,7 +2,6 @@ package app
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/msgbox"
@@ -23,31 +22,28 @@ import (
 func (m *Mux) ReloadConfig() {
 	slog.Info("reload: starting")
 	paths := m.Opts.Paths
+	hadError := false
+	warnings := 0
 
 	if cfg, err := config.Load(paths.ConfigFile()); err == nil {
 		m.applyReloadedConfig(cfg)
 	} else {
+		hadError = true
 		slog.Warn("reload: config.toml", "err", err)
-		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
-			"Couldn't reload config.toml:\n%s",
-			[]any{err.Error()}, msgbox.OKOnly)
 	}
 
 	if profiles, err := profile.Load(paths.ProfilesFile()); err == nil {
 		m.Opts.Profiles = profiles
 	} else {
+		hadError = true
 		slog.Warn("reload: profiles.toml", "err", err)
 	}
 
-	overrides, rejected, err := config.LoadKeybindings(paths.KeybindingsFile())
+	activeSpec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
+	overrides, diagnostics, err := config.LoadKeybindings(paths.KeybindingsFile(), activeSpec.ChordToken)
 	if err != nil {
+		hadError = true
 		slog.Warn("reload: keybindings.toml", "err", err)
-	}
-	if len(rejected) > 0 {
-		slog.Warn("reload: keybindings.toml has undispatchable chords", "rejected", rejected)
-		msgbox.Showf(&m.App.Desktop.Group, msgbox.Warning,
-			"keybindings.toml: %d binding(s) use chords the prefix dispatcher can't emit and were skipped:\n%s",
-			[]any{len(rejected), strings.Join(rejected, "\n")}, msgbox.OKOnly)
 	}
 
 	// Factory baseline → user overrides → prefix-key. Order matters:
@@ -58,7 +54,16 @@ func (m *Mux) ReloadConfig() {
 	// actually goes away.
 	m.Reg.ResetChords()
 	if len(overrides) > 0 {
-		m.Reg.ApplyOverrides(overrides)
+		diagnostics = append(diagnostics, m.Reg.ApplyOverrides(overrides)...)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == "error" {
+			hadError = true
+			slog.Error("reload: keybindings.toml", "diagnostic", diagnostic.String())
+		} else {
+			warnings++
+			slog.Warn("reload: keybindings.toml", "diagnostic", diagnostic.String())
+		}
 	}
 	// Resolve through Lookup FIRST and rebind with the resolved token —
 	// never the raw config string — so the registry's chords and the
@@ -83,9 +88,19 @@ func (m *Mux) ReloadConfig() {
 		m.Opts.RefreshUI()
 	}
 	m.refreshStatusBar()
-	slog.Info("reload: done", "overrides", len(overrides))
-	msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
-		"Config reloaded.", msgbox.OKOnly)
+	slog.Info("reload: done", "overrides", len(overrides), "had_error", hadError, "warnings", warnings)
+	switch {
+	case hadError:
+		msgbox.Show(&m.App.Desktop.Group, msgbox.Warning,
+			"Config reload completed with errors. Open the Log Viewer for full details.", msgbox.OKOnly)
+	case warnings > 0:
+		msgbox.Showf(&m.App.Desktop.Group, msgbox.Info,
+			"Config reloaded with %d warning(s). Open the Log Viewer for details.",
+			[]any{warnings}, msgbox.OKOnly)
+	default:
+		msgbox.Show(&m.App.Desktop.Group, msgbox.Info,
+			"Config reloaded.", msgbox.OKOnly)
+	}
 }
 
 // applyReloadedConfig swaps in the freshly-loaded config and forwards the

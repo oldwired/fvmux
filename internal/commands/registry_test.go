@@ -42,6 +42,17 @@ func TestRegistryDuplicateIDPanics(t *testing.T) {
 	r.Register(&Command{ID: 9001, Name: "b"})
 }
 
+func TestRegistryDuplicateFactoryChordPanics(t *testing.T) {
+	r := New()
+	r.Register(&Command{ID: 9001, Name: "a", Chord: "C-g x"})
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on duplicate factory chord")
+		}
+	}()
+	r.Register(&Command{ID: 9002, Name: "b", Chord: "C-g x"})
+}
+
 func TestLookupChordUnboundReturnsNil(t *testing.T) {
 	r := New()
 	r.Register(&Command{ID: 9002, Name: "no-chord"}) // empty Chord
@@ -76,5 +87,26 @@ func TestAllSortedByID(t *testing.T) {
 	all := r.All()
 	if len(all) != 3 || all[0].ID != 10 || all[1].ID != 20 || all[2].ID != 30 {
 		t.Fatalf("All not sorted by ID: %v", all)
+	}
+}
+
+func TestApplyOverridesReportsReachabilityChanges(t *testing.T) {
+	r := New()
+	r.Register(&Command{ID: 1, Name: "one", Chord: "C-g a"})
+	r.Register(&Command{ID: 2, Name: "two", Chord: "C-g b"})
+	diagnostics := r.ApplyOverrides([]Override{
+		{Index: 1, Chord: "C-g b", Command: "one"},
+		{Index: 2, Chord: "C-g c", Command: "one"},
+		{Index: 3, Chord: "C-g d", Command: "missing"},
+		{Index: 4, Chord: "C-g c", Command: "one"},
+	})
+	if len(diagnostics) != 4 {
+		t.Fatalf("got %d diagnostics, want collision + rebound + unknown + duplicate: %+v", len(diagnostics), diagnostics)
+	}
+	if got := r.LookupChord("C-g c"); got == nil || got.Name != "one" {
+		t.Fatalf("last valid binding did not win: %#v", got)
+	}
+	if r.LookupChord("C-g b") != nil {
+		t.Fatal("displaced command retained the collided chord")
 	}
 }

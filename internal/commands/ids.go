@@ -100,6 +100,7 @@ const (
 	CmdCheatsheet     uint16 = 1062
 	CmdLiteralPrefix  uint16 = 1063 // Hidden: forwards Ctrl-G to focused pane.
 	CmdTickerRedraw   uint16 = 1064 // Hidden: 1s status bar refresh trigger.
+	CmdOpenMenu       uint16 = 1065 // Ctrl-G m — universal menu activation.
 	CmdReloadConfig   uint16 = 1066 // Help → Reload Config.
 	CmdLogViewer      uint16 = 1067 // Ctrl-G L — open log viewer modal.
 

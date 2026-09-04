@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/shortcuts"
 	"github.com/oldwired/fvmux/internal/whimsy"
 )
 
@@ -40,7 +41,9 @@ func GenerateBaked(reg *commands.Registry) string {
 // category in Categories order, appending tagline as a footer when non-empty.
 func generate(reg *commands.Registry, tagline string) string {
 	var b strings.Builder
-	b.WriteString("# fvmux Cheatsheet\n\n")
+	b.WriteString("# fvmux Keyboard Reference\n\n")
+	b.WriteString("Global commands use the configured prefix. Contextual keys apply only in the named mode or focused view.\n\n")
+	b.WriteString("## Global prefix commands\n\n")
 
 	seen := map[string]bool{}
 	for _, cat := range Categories {
@@ -63,13 +66,16 @@ func generate(reg *commands.Registry, tagline string) string {
 	for _, cat := range sortedExtras {
 		writeCategory(&b, reg, cat)
 	}
+	b.WriteString(shortcuts.Markdown(activePrefix(reg)))
 	if tagline != "" {
 		b.WriteString("---\n\n")
 		b.WriteString("*")
 		b.WriteString(tagline)
 		b.WriteString("*\n")
 	}
-	return b.String()
+	// Markdown files conventionally end in one newline. Keeping this invariant
+	// here prevents generated outputs from accumulating a blank line at EOF.
+	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
 // dailyTagline picks a whimsy footer that is stable within a session but
@@ -96,7 +102,7 @@ func writeCategory(b *strings.Builder, reg *commands.Registry, category string) 
 	if len(visible) == 0 {
 		return
 	}
-	b.WriteString("## ")
+	b.WriteString("### ")
 	b.WriteString(category)
 	b.WriteString("\n\n")
 	for _, c := range visible {
@@ -110,4 +116,13 @@ func writeCategory(b *strings.Builder, reg *commands.Registry, category string) 
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
+}
+
+func activePrefix(reg *commands.Registry) string {
+	if command := reg.ByID(commands.CmdLiteralPrefix); command != nil {
+		if parts := strings.Fields(command.Chord); len(parts) > 0 {
+			return parts[0]
+		}
+	}
+	return "C-g"
 }

@@ -14,6 +14,7 @@ import (
 // "c-g tab" and "C-g Tab" both resolve to the same command.
 func TestDefaultChordsAreCanonical(t *testing.T) {
 	reg := commands.Defaults()
+	seen := map[string]string{}
 	for _, c := range reg.All() {
 		if c.Chord == "" {
 			continue
@@ -21,6 +22,14 @@ func TestDefaultChordsAreCanonical(t *testing.T) {
 		if got := keys.Canonical(c.Chord); got != c.Chord {
 			t.Errorf("command %q chord %q is not canonical: keys.Canonical → %q",
 				c.Name, c.Chord, got)
+		}
+		if previous := seen[c.Chord]; previous != "" {
+			t.Errorf("commands %q and %q share default chord %q", previous, c.Name, c.Chord)
+		}
+		seen[c.Chord] = c.Name
+		parsed, err := keys.Parse(c.Chord)
+		if err != nil || keys.Format(parsed) != c.Chord {
+			t.Errorf("command %q chord %q does not round-trip: parsed=%+v err=%v", c.Name, c.Chord, parsed, err)
 		}
 	}
 }

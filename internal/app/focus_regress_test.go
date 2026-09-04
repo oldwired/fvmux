@@ -44,6 +44,39 @@ func assertVisibleFocus(t *testing.T, ws *windowState, want *layout.PaneNode) {
 	}
 }
 
+func TestFocusWindowByNumberRaisesTargetWithoutBuryingMouseListener(t *testing.T) {
+	desk := fvapp.NewDesktop(geom.NewRect(0, 0, 80, 24))
+	m := &Mux{
+		App:         &fvapp.Application{Program: &fvapp.Program{Desktop: desk}},
+		windows:     map[views.View]*windowState{},
+		fileWindows: map[views.View]*fileWindowState{},
+	}
+	one := views.NewWindow(geom.NewRect(0, 0, 40, 16), "one", 1)
+	two := views.NewWindow(geom.NewRect(5, 3, 45, 19), "two", 2)
+	m.registerWindow(one, &windowState{Number: 1, Frame: one})
+	m.registerWindow(two, &windowState{Number: 2, Frame: two})
+	m.installMouseListener()
+
+	if desk.Current() != views.View(two) {
+		t.Fatalf("precondition: window 2 should be focused, got %T", desk.Current())
+	}
+	m.focusWindowByNumber(1)
+
+	if desk.Current() != views.View(one) {
+		t.Fatalf("window 1 was not focused, got %T", desk.Current())
+	}
+	if m.lastFocused != views.View(two) {
+		t.Fatalf("last focused = %T, want window 2", m.lastFocused)
+	}
+	children := desk.Children
+	if children[len(children)-1] != views.View(m.mouseView) {
+		t.Fatalf("mouse listener is not topmost after raise: %s", m.childrenOrder())
+	}
+	if children[len(children)-2] != views.View(one) {
+		t.Fatalf("focused window was not raised to foreground: %s", m.childrenOrder())
+	}
+}
+
 func TestZoomedPaneNavigationKeepsVisibleAndLogicalFocusTogether(t *testing.T) {
 	m, ws, leafA, leafB := newFocusMux(t)
 	m.doZoom()

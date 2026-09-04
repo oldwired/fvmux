@@ -11,6 +11,7 @@ type flags struct {
 	Profile     string
 	NoSplash    bool
 	Log         string
+	CheckConfig bool
 	ShowVersion bool
 }
 
@@ -21,6 +22,7 @@ func parseFlags() flags {
 	flag.StringVar(&f.Profile, "profile", "", "profile name to use for the initial pane")
 	flag.BoolVar(&f.NoSplash, "no-splash", false, "skip the splash screen and welcome dialog")
 	flag.StringVar(&f.Log, "log", "", "path to log file (defaults to stderr ring buffer)")
+	flag.BoolVar(&f.CheckConfig, "check-config", false, "validate configuration files and exit")
 	flag.BoolVar(&f.ShowVersion, "version", false, "print version and exit")
 	flag.Parse()
 	return f

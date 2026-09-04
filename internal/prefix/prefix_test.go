@@ -6,6 +6,7 @@ import (
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
+	"github.com/oldwired/fv-go/pkg/fv/term"
 
 	"github.com/oldwired/fvmux/internal/commands"
 )
@@ -35,7 +36,7 @@ func newTestRegistry() (*commands.Registry, *bool, *bool) {
 
 func keyEvent(code uint16, unicode rune) *drivers.Event {
 	return &drivers.Event{
-		What:        consts.EvKeyboard,
+		What:        consts.EvKeyDown,
 		KeyCode:     code,
 		UnicodeChar: unicode,
 	}
@@ -97,42 +98,6 @@ func TestPrefix_ArmTimeoutExpires(t *testing.T) {
 	}
 }
 
-func TestRecordPress_TriplePressFires(t *testing.T) {
-	v := &View{}
-	var fired int
-	v.OnTriplePress = func() { fired++ }
-
-	now := time.Now()
-	v.recordPress(now)
-	v.recordPress(now.Add(200 * time.Millisecond))
-	v.recordPress(now.Add(400 * time.Millisecond))
-
-	if fired != 1 {
-		t.Fatalf("expected triple-press to fire once, got %d", fired)
-	}
-	// State resets — the next press alone must not re-fire.
-	v.recordPress(now.Add(500 * time.Millisecond))
-	if fired != 1 {
-		t.Fatalf("triple-press fired again after reset; got %d", fired)
-	}
-}
-
-func TestPrefix_TriplePressViaHandleEvent(t *testing.T) {
-	reg, _, _ := newTestRegistry()
-	v := New(reg, &commands.Ctx{}, Default)
-	var fired int
-	v.OnTriplePress = func() { fired++ }
-
-	// Three real prefix taps through the state machine (not a direct
-	// recordPress) — the gesture as a user actually performs it.
-	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
-	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
-	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
-	if fired != 1 {
-		t.Fatalf("three prefix taps should fire OnTriplePress once, got %d", fired)
-	}
-}
-
 func TestPrefix_CtrlSecondKeyDistinctFromBareLetter(t *testing.T) {
 	r := commands.New()
 	var bare, ctrl bool
@@ -152,7 +117,9 @@ func TestPrefix_CtrlSecondKeyDistinctFromBareLetter(t *testing.T) {
 	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
 	// Some terminals report the bare letter in UnicodeChar alongside the
 	// Ctrl key code; the chord must still resolve to C-c, not c.
-	v.HandleEvent(keyEvent(consts.KbCtrlC, 'c'))
+	ctrlC := keyEvent(consts.KbCtrlC, 'c')
+	ctrlC.KeyShift = consts.KbCtrlShift
+	v.HandleEvent(ctrlC)
 	if !ctrl || bare {
 		t.Fatalf("C-g C-c should fire ctrl only (bare=%v ctrl=%v)", bare, ctrl)
 	}
@@ -309,18 +276,78 @@ func TestPrefix_DisabledChordReportsAndConsumes(t *testing.T) {
 	}
 }
 
-func TestRecordPress_OutsideWindowDoesNotFire(t *testing.T) {
-	v := &View{}
-	var fired int
-	v.OnTriplePress = func() { fired++ }
+func TestPrefix_ThirdPressOnlyArmsAfterLiteralDouble(t *testing.T) {
+	reg, _, doubleTap := newTestRegistry()
+	v := New(reg, &commands.Ctx{}, Default)
 
-	now := time.Now()
-	v.recordPress(now)
-	v.recordPress(now.Add(500 * time.Millisecond))
-	// Third press well outside tripleWindow.
-	v.recordPress(now.Add(5 * time.Second))
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	if !*doubleTap {
+		t.Fatal("first two presses must perform the immediate literal-prefix action")
+	}
+	*doubleTap = false
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	if *doubleTap {
+		t.Fatal("third press must not invoke an overlapping gesture")
+	}
+	if !v.Armed() {
+		t.Fatal("third press should begin a fresh prefix chord")
+	}
+}
 
-	if fired != 0 {
-		t.Fatalf("press outside window should not fire; got %d", fired)
+func TestPrefix_DispatchesEffectiveKeyIdentities(t *testing.T) {
+	tests := []struct {
+		name  string
+		want  string
+		event term.Event
+	}{
+		{"modified arrow", "C-g C-Left", term.Event{Kind: term.EventKey, Key: term.KeyLeft, Mods: term.ModCtrl}},
+		{"modified function", "C-g A-F5", term.Event{Kind: term.EventKey, Key: term.KeyF5, Mods: term.ModAlt}},
+		{"shift F12", "C-g S-F12", term.Event{Kind: term.EventKey, Key: term.KeyF12, Mods: term.ModShift}},
+		{"unicode", "C-g 界", term.Event{Kind: term.EventKey, Rune: '界'}},
+		{"ctrl space", "C-g C-Space", term.Event{Kind: term.EventKey, Rune: 0, Mods: term.ModCtrl}},
+		{"ctrl backslash", `C-g C-\`, term.Event{Kind: term.EventKey, Rune: 0x1c, Mods: term.ModCtrl}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := commands.New()
+			fired := false
+			reg.Register(&commands.Command{ID: 1, Name: tt.name, Chord: tt.want,
+				Action: func(*commands.Ctx) { fired = true }})
+			v := New(reg, &commands.Ctx{}, Default)
+			v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+			ev := drivers.FromTermEvent(tt.event)
+			v.HandleEvent(&ev)
+			if !fired {
+				t.Fatalf("event did not dispatch %q (effective key: %+v)", tt.want, ev.EffectiveKey())
+			}
+		})
+	}
+}
+
+func TestLiteralPrefixAndWizardStaySeparateAfterRebinding(t *testing.T) {
+	for _, spec := range Available {
+		t.Run(spec.ConfigKey, func(t *testing.T) {
+			reg := commands.Defaults()
+			if spec.ChordToken != Default.ChordToken {
+				reg.RebindPrefix(Default.ChordToken, spec.ChordToken)
+			}
+			literal, wizard := 0, 0
+			reg.ByID(commands.CmdLiteralPrefix).Action = func(*commands.Ctx) { literal++ }
+			reg.ByID(commands.CmdResetFirstRun).Action = func(*commands.Ctx) { wizard++ }
+			v := New(reg, &commands.Ctx{}, spec)
+
+			v.HandleEvent(keyEvent(spec.KeyCode, 0))
+			v.HandleEvent(keyEvent(spec.KeyCode, 0))
+			if literal != 1 || wizard != 0 {
+				t.Fatalf("double prefix: literal=%d wizard=%d", literal, wizard)
+			}
+
+			v.HandleEvent(keyEvent(spec.KeyCode, 0))
+			v.HandleEvent(keyEvent(0, 'W'))
+			if literal != 1 || wizard != 1 {
+				t.Fatalf("wizard chord: literal=%d wizard=%d", literal, wizard)
+			}
+		})
 	}
 }

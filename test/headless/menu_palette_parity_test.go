@@ -15,7 +15,9 @@ import (
 
 // TestMenuAndPaletteCoverEveryVisibleCommand asserts the load-bearing
 // contract: every non-Hidden command in the default registry is reachable
-// via *both* the menu bar and the command palette, exactly once each.
+// from the command palette and, unless explicitly self-referential, from the
+// menu bar exactly once. Activate Menu Bar intentionally has no row inside the
+// menu it opens.
 //
 // This guards against the two failure modes that can creep in as the
 // registry grows: (1) a category typo so the menu can't find the entry
@@ -43,7 +45,8 @@ func TestMenuAndPaletteCoverEveryVisibleCommand(t *testing.T) {
 	}
 
 	for id, c := range want {
-		if menuIDs[id] == 0 {
+		menuOptional := id == commands.CmdOpenMenu
+		if menuIDs[id] == 0 && !menuOptional {
 			t.Errorf("menu missing command id=%d (%s, category %q)",
 				id, c.Name, c.Category)
 		}

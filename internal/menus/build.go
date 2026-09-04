@@ -37,7 +37,9 @@ func BuildWithExtras(bounds geom.Rect, reg *commands.Registry, extras Extras) *f
 		&fvmenus.Item{Name: "~T~ransfer", Sub: transferMenu(reg, extras)},
 		&fvmenus.Item{Name: "~H~elp", Sub: helpMenu(reg)},
 	)
-	return fvmenus.NewMenuBar(bounds, bar)
+	menuBar := fvmenus.NewMenuBar(bounds, bar)
+	menuBar.PassThroughRawKeys = true
+	return menuBar
 }
 
 func fileMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {

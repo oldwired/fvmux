@@ -30,6 +30,12 @@ func (r *Registry) Register(c *Command) {
 	if _, dup := r.cmds[c.ID]; dup {
 		panic(fmt.Sprintf("commands.Registry: duplicate ID %d (%q)", c.ID, c.Name))
 	}
+	if c.Chord != "" {
+		if other := r.byChord[c.Chord]; other != nil {
+			panic(fmt.Sprintf("commands.Registry: duplicate factory chord %q (%q and %q)",
+				c.Chord, other.Name, c.Name))
+		}
+	}
 	c.FactoryChord = c.Chord
 	r.cmds[c.ID] = c
 	r.byCategory[c.Category] = append(r.byCategory[c.Category], c)
@@ -71,8 +77,27 @@ func (r *Registry) ResetChords() {
 // Override is one entry in keybindings.toml — a chord that should be
 // bound to the named command, or removed entirely when Command is "".
 type Override struct {
+	Index   int // one-based source position; zero means slice position + 1.
 	Chord   string
 	Command string // empty ⇒ remove whatever's currently bound to Chord.
+}
+
+// BindingDiagnostic is one actionable observation about a user override.
+// Index is one-based to match the [[binding]] order in keybindings.toml.
+type BindingDiagnostic struct {
+	Severity string
+	Index    int
+	Chord    string
+	Command  string
+	Reason   string
+}
+
+func (d BindingDiagnostic) String() string {
+	target := d.Chord
+	if d.Command != "" {
+		target += " → " + d.Command
+	}
+	return fmt.Sprintf("binding %d (%s): %s", d.Index, target, d.Reason)
 }
 
 // ApplyOverrides walks overrides in order and mutates the registry to
@@ -80,14 +105,30 @@ type Override struct {
 // command currently owns it. A non-empty Command both unbinds anything
 // currently on the chord AND replaces the named command's chord.
 //
-// Unknown command names are skipped silently — keybindings.toml is
-// user-authored and we don't want to crash on typos. The caller can
-// inspect the registry afterward for diagnostics.
-func (r *Registry) ApplyOverrides(overrides []Override) {
-	for _, o := range overrides {
+// Every reachability-changing condition is returned as a structured
+// diagnostic. Legal collisions remain last-entry-wins, but the caller can tell
+// the user exactly which command became unbound.
+func (r *Registry) ApplyOverrides(overrides []Override) []BindingDiagnostic {
+	var diagnostics []BindingDiagnostic
+	seenEntries := map[string]int{}
+	seenCommands := map[*Command]int{}
+	for i, o := range overrides {
+		index := i + 1
+		if o.Index > 0 {
+			index = o.Index
+		}
 		if o.Chord == "" {
 			continue
 		}
+		entryKey := o.Chord + "\x00" + o.Command
+		if previous := seenEntries[entryKey]; previous != 0 {
+			diagnostics = append(diagnostics, BindingDiagnostic{
+				Severity: "warning", Index: index, Chord: o.Chord, Command: o.Command,
+				Reason: fmt.Sprintf("duplicate of binding %d; it has no additional effect", previous),
+			})
+			continue
+		}
+		seenEntries[entryKey] = index
 		if o.Command == "" {
 			if c := r.byChord[o.Chord]; c != nil {
 				delete(r.byChord, o.Chord)
@@ -97,10 +138,25 @@ func (r *Registry) ApplyOverrides(overrides []Override) {
 		}
 		target := r.LookupByName(o.Command)
 		if target == nil {
+			diagnostics = append(diagnostics, BindingDiagnostic{
+				Severity: "error", Index: index, Chord: o.Chord, Command: o.Command,
+				Reason: "unknown command name",
+			})
 			continue
 		}
+		if previous := seenCommands[target]; previous != 0 {
+			diagnostics = append(diagnostics, BindingDiagnostic{
+				Severity: "warning", Index: index, Chord: o.Chord, Command: o.Command,
+				Reason: fmt.Sprintf("the same command was rebound by binding %d; this later entry wins", previous),
+			})
+		}
+		seenCommands[target] = index
 		// Free up the chord if some other command currently holds it.
 		if other := r.byChord[o.Chord]; other != nil && other != target {
+			diagnostics = append(diagnostics, BindingDiagnostic{
+				Severity: "warning", Index: index, Chord: o.Chord, Command: o.Command,
+				Reason: fmt.Sprintf("chord collision displaces %q, which becomes unbound", other.Name),
+			})
 			other.Chord = ""
 		}
 		// Strip target's old binding (if any) from byChord first.
@@ -110,6 +166,7 @@ func (r *Registry) ApplyOverrides(overrides []Override) {
 		target.Chord = o.Chord
 		r.byChord[o.Chord] = target
 	}
+	return diagnostics
 }
 
 // ByID returns the command with the given ID, or nil if unknown.

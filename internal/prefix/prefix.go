@@ -5,9 +5,7 @@ package prefix
 
 import (
 	"fmt"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
@@ -15,16 +13,13 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/views"
 
 	"github.com/oldwired/fvmux/internal/commands"
+	"github.com/oldwired/fvmux/internal/keys"
 )
 
 // armTimeout: if no second keystroke arrives within this window after
 // the prefix is pressed, the next keystroke disarms but is NOT treated
 // as part of a chord. Matches tmux's default 2-second behaviour.
 const armTimeout = 2 * time.Second
-
-// tripleWindow: three prefix presses within this window in a row fire
-// the OnTriplePress callback. Easter egg — splash replay.
-const tripleWindow = 1500 * time.Millisecond
 
 // View is the OfPreProcess listener. Insert one into Desktop's children
 // (NOT as the current child) so it intercepts keyboard events before
@@ -42,15 +37,6 @@ type View struct {
 	suspended bool
 
 	armedAt time.Time // zero value ⇒ not armed
-
-	// Last two prefix-press timestamps (newest at [1]). Three presses
-	// within tripleWindow trigger OnTriplePress (splash replay).
-	lastPresses [2]time.Time
-
-	// OnTriplePress, if non-nil, is called on the third prefix press
-	// within tripleWindow. Cleared by the caller (typically a one-shot
-	// installer). Re-entry safe.
-	OnTriplePress func()
 
 	// OnUnknown reports an attempted chord that has no registry binding.
 	// OnUnavailable reports a bound command whose live predicate vetoed it.
@@ -124,9 +110,7 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 
 	if v.armedAt.IsZero() {
 		if ev.KeyCode == v.spec.KeyCode {
-			now := time.Now()
-			v.armedAt = now
-			v.recordPress(now)
+			v.armedAt = time.Now()
 			ev.Clear()
 		}
 		return
@@ -134,14 +118,6 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 
 	// Second keystroke: disarm regardless of match.
 	v.armedAt = time.Time{}
-
-	// A repeated prefix press lands here (the double-tap that sends a
-	// literal prefix). Count it too, so three taps in a row fire
-	// OnTriplePress — recording only in the arm branch would miss every
-	// even-numbered tap and the gesture could never reach three.
-	if ev.KeyCode == v.spec.KeyCode {
-		v.recordPress(time.Now())
-	}
 
 	chord := v.chordOf(ev)
 	if chord == "" {
@@ -183,84 +159,22 @@ func (v *View) describeChord(ev *drivers.Event) string {
 	if chord := v.chordOf(ev); chord != "" {
 		return chord
 	}
-	atom := ""
-	switch ev.KeyCode {
-	case consts.KbLeft:
-		atom = "Left"
-	case consts.KbRight:
-		atom = "Right"
-	case consts.KbUp:
-		atom = "Up"
-	case consts.KbDown:
-		atom = "Down"
-	case consts.KbHome:
-		atom = "Home"
-	case consts.KbEnd:
-		atom = "End"
-	case consts.KbPgUp:
-		atom = "PageUp"
-	case consts.KbPgDn:
-		atom = "PageDown"
-	case consts.KbDel:
-		atom = "Delete"
-	case consts.KbIns:
-		atom = "Insert"
-	default:
-		atom = fmt.Sprintf("key-%04x", ev.KeyCode)
-	}
-	return v.spec.ChordToken + " " + atom
-}
-
-// recordPress shifts the press-timestamp ring and fires OnTriplePress
-// whenever three consecutive presses fall within tripleWindow.
-func (v *View) recordPress(now time.Time) {
-	prev, prev2 := v.lastPresses[1], v.lastPresses[0]
-	v.lastPresses[0] = prev
-	v.lastPresses[1] = now
-	if v.OnTriplePress == nil {
-		return
-	}
-	if !prev.IsZero() && !prev2.IsZero() &&
-		now.Sub(prev2) <= tripleWindow {
-		// Reset to avoid re-firing on the next single press.
-		v.lastPresses = [2]time.Time{}
-		v.OnTriplePress()
-	}
+	return fmt.Sprintf("%s key-%04x", v.spec.ChordToken, ev.KeyCode)
 }
 
 // chordOf formats the second keystroke as the chord string used in the
 // registry. Returns "" for keys that can't appear in a chord (e.g.,
 // modifier-only events).
 //
-// Special keys (Tab, Space, Esc, Enter, Backspace, 0–9 digits) are
-// canonicalised to their named tokens so registry chords stay
-// readable.
+// All non-prefix keys go through keys.StepFromEvent, which in turn uses
+// Event.EffectiveKey. The repeated prefix is recognized directly because it
+// is also the state-machine delimiter and must retain literal-prefix behavior.
 func (v *View) chordOf(ev *drivers.Event) string {
 	if ev.KeyCode == v.spec.KeyCode {
 		return v.spec.ChordToken + " " + v.spec.ChordToken
 	}
-	if atom := specialAtom(ev.KeyCode); atom != "" {
-		return v.spec.ChordToken + " " + atom
-	}
-	// A Ctrl-modified second key must canonicalise to a "C-x" token, not
-	// fall through to its bare letter — otherwise C-g C-c would collide
-	// with C-g c (e.g. a stray Ctrl firing New Window).
-	if atom := ctrlAtom(ev.KeyCode); atom != "" {
-		return v.spec.ChordToken + " " + atom
-	}
-	if ev.UnicodeChar != 0 {
-		return v.spec.ChordToken + " " + string(ev.UnicodeChar)
-	}
-	return ""
-}
-
-// ctrlAtom maps a Ctrl+letter key code to its canonical "C-x" chord step.
-// Returns "" for anything that isn't a Ctrl-letter. Tab/Enter/Backspace
-// share code points with Ctrl-I/M/H at the byte level but have distinct
-// key codes handled by specialAtom first, so they never reach here.
-func ctrlAtom(code uint16) string {
-	if l, ok := ctrlLetters[code]; ok {
-		return "C-" + string(l)
+	if step, ok := keys.StepFromEvent(ev); ok {
+		return v.spec.ChordToken + " " + keys.FormatStep(step)
 	}
 	return ""
 }
@@ -277,61 +191,18 @@ var ctrlLetters = map[uint16]rune{
 	consts.KbCtrlY: 'y', consts.KbCtrlZ: 'z',
 }
 
-// DispatchableChord reports whether chord — in canonical registry form
-// "<prefix> <step>" — can actually be produced by the dispatcher's
-// state machine. Two requirements:
-//
-//   - The first step must be the default prefix token ("C-g"):
-//     keybindings.toml is authored in the default-prefix space and
-//     rebound afterwards, so a chord led by anything else ("C-x a")
-//     applies fine but is never emitted — while having already
-//     stripped the command's working factory chord.
-//   - The second step must be one of the atoms chordOf emits: a
-//     C-letter token, one of the five special atoms (Tab, Esc, Enter,
-//     Backspace, Space), or a bare printable character. Arrows,
-//     F-keys, and A-/S- modified steps parse but can never fire.
-//
-// Callers reject failing bindings with a warning instead of applying
-// them.
+// DispatchableChord is retained as a compatibility helper for callers that
+// only need a boolean. Configuration uses keys.ValidateBindingChord directly
+// so it can preserve actionable diagnostics.
 func DispatchableChord(chord string) bool {
-	steps := strings.Fields(chord)
-	if len(steps) != 2 {
+	canonical, diagnostics := keys.ValidateBindingChord(chord, Default.ChordToken)
+	if canonical == "" {
 		return false
 	}
-	if steps[0] != Default.ChordToken {
-		return false
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == keys.SeverityError {
+			return false
+		}
 	}
-	return dispatchableStep(steps[1])
-}
-
-func dispatchableStep(step string) bool {
-	if utf8.RuneCountInString(step) == 1 {
-		return true // bare printable character (including "-")
-	}
-	switch step {
-	case "Tab", "Esc", "Enter", "Backspace", "Space":
-		return true
-	}
-	if len(step) == 3 && strings.HasPrefix(step, "C-") {
-		return step[2] >= 'a' && step[2] <= 'z'
-	}
-	return false
-}
-
-// specialAtom maps fv-go key codes to canonical chord-step names. We
-// match against the registered chord strings (e.g., "Tab" in "C-g Tab").
-func specialAtom(code uint16) string {
-	switch code {
-	case consts.KbTab:
-		return "Tab"
-	case consts.KbEsc:
-		return "Esc"
-	case consts.KbEnter:
-		return "Enter"
-	case consts.KbBack:
-		return "Backspace"
-	case consts.KbSpaceBar:
-		return "Space"
-	}
-	return ""
+	return true
 }

@@ -20,8 +20,8 @@ Claude Code-specific guidance for this repo is in [`CLAUDE.md`](CLAUDE.md).
 
 **v1 alpha — Stage 1 complete.** Stage 0 (fv-go prerequisites) and
 Stage 1 (the 13-phase fvmux implementation, A through M) are shipped:
-build/test/race green on macOS and Linux, cross-compiles to Windows
-and Linux/arm64. Every command surface (menus, `Ctrl-G P` palette,
+build/test/race green on macOS and Linux, with native Windows
+build/vet/test jobs configured in CI. Every command surface (menus, `Ctrl-G P` palette,
 `Ctrl-G ?` cheatsheet) is wired from a single `commands.Registry` so
 they cannot drift apart.
 
@@ -41,7 +41,8 @@ What's solid:
 - Sync-input broadcast across all panes in a window (`Ctrl-G ~`).
 - TOML config + profiles + saved sessions with layout serialisation.
 - Live keybinding overrides via `~/.config/fvmux/keybindings.toml` +
-  Help → Reload Config (no restart).
+  Help → Reload Config (no restart), with `fvmux --check-config`
+  diagnostics.
 - SSH host picker reading `~/.ssh/config` + `hosts.toml`.
 - **SSH ControlMaster pool** — second `Ctrl-G H` / `Ctrl-G F` to the
   same alias reuses the master socket (no re-auth).
@@ -71,7 +72,12 @@ What's solid:
   for file output.
 - Confirm-kill before tearing down live panes / windows / app.
 - Right-click pane context menu, click-to-focus.
-- Eight tasteful easter eggs (see [Whimsy](#whimsy)).
+- A small set of tasteful easter eggs (see [Whimsy](#whimsy)).
+
+Keyboard fidelity relies on `github.com/oldwired/fv-go v0.5.4+`. That
+release supplies normalized key identity, classic modified-key encoding,
+Ctrl-Space and Alt-Unicode forwarding, DECCKM, and bounded escape-sequence
+framing; fvmux does not duplicate those lower-level mechanisms.
 
 ---
 
@@ -158,6 +164,7 @@ Then:
 fvmuxa              # start, or attach to an existing fvmux
 # (work normally)
 # Press F12 then d  to detach.
+# Press F12 twice   to send a literal F12 through the wrapper.
 fvmuxa              # reattach later.
 ```
 
@@ -197,9 +204,9 @@ First launch shows the wizard:
    Esc reverts to whatever was active before.
 
 Choices are persisted to `~/.config/fvmux/config.toml` and applied
-immediately. The triple-`Ctrl-G` chord (within 1.5 s) re-runs the
-wizard from anywhere; **Help → Reset First-Run Wizard…** does the
-same from the menu.
+immediately. `Ctrl-G W` re-runs the wizard without overlapping literal
+prefix forwarding; **Help → Reset First-Run Wizard…** does the same
+from the menu.
 
 A version-bump notification fires on the first launch after the binary
 version changes — quick toast in the top-right pointing at `Ctrl-G ?`.
@@ -208,9 +215,12 @@ version changes — quick toast in the top-right pointing at `Ctrl-G ?`.
 
 ## Key bindings
 
-Every chord goes through the configured prefix. Tables below assume
-the default `Ctrl-G`. Press **`Ctrl-G ?`** inside fvmux for the full,
-auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheatsheet.md)).
+Every global chord goes through the configured prefix. The concise tables
+below assume the default `Ctrl-G`. Press **`Ctrl-G ?`** inside fvmux or
+read the generated [complete keyboard reference](KEYBINDINGS.md), which
+also covers menu navigation, terminal scrollback, modes, Files, dialogs,
+the `fvmuxa` wrapper, and platform notes. The in-app copy renders the
+active prefix.
 
 ### File / session
 | Chord | Action |
@@ -219,6 +229,7 @@ auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheat
 | `Ctrl-G C` | New window from a profile |
 | `Ctrl-G s` | Open saved session… |
 | `Ctrl-G S` | Save current session |
+| `Ctrl-G $` | Rename current session |
 | (menu) | Save Session As… (also covers rename-on-write) |
 | `Ctrl-G :` | Run command… (free-form `sh -c`, or `:tea` / `:rot13` / `:konami`) |
 | `Ctrl-G D` | Detach from tmux (when running inside fvmuxa) |
@@ -272,6 +283,7 @@ Even-V, Main-H, Main-V, Tiled).
 | `Ctrl-G T` | Theme picker (live preview) |
 | `Ctrl-G t` | Toggle status-bar clock |
 | `Ctrl-G r` | Force redraw |
+| `Ctrl-G m` | Activate the fvmux menu from any focus |
 | (menu) | View → Edit Themes… (in-app TOML editor; saves auto-reload) |
 | (menu) | View → Toggle Status Bar / Menu Bar |
 
@@ -287,12 +299,17 @@ Even-V, Main-H, Main-V, Tiled).
 | (menu) | Transfer → Active Transfers… / Clear Completed |
 
 Inside a Files window:
-- **Tab** switches focus between remote (top) and local (bottom) trees.
+- **Tab** rotates through the remote tree, remote listing, local tree,
+  and local listing.
+- **Enter** enters a folder or previews a file.
 - **F5** copies the focused listing's selection (file *or* folder,
   recursively) to the other panel's cwd.
 - **F6** moves/renames the selection: a bare name renames it in place;
   a path moves it to the other side (copy, then delete the source once
   the copy fully succeeds).
+- **F7** creates a directory on the focused side.
+- **F8** deletes the selected entry recursively.
+- **Ctrl-R** refreshes both panels.
 - **Del** cancels the most recent in-flight transfer (single files
   hard-abort immediately; folder-copy files cancel at the next chunk).
 - **Esc** closes the window (with confirmation when operations are active).
@@ -305,7 +322,12 @@ Inside a Files window:
 | `Ctrl-G ?` | Cheatsheet |
 | `Ctrl-G L` | Log viewer (ring buffer; `-log=path` for file output) |
 | `Ctrl-G Ctrl-G` | Send a literal Ctrl-G to the focused pane |
-| (triple `Ctrl-G` within 1.5 s) | Re-run the first-run wizard |
+| `Ctrl-G W` | Re-run the first-run wizard |
+
+While an embedded terminal is focused, `F10` and the top-level Alt
+mnemonics (`Alt-F/E/V/P/W/C/T/H`) are forwarded to the child. Outside a
+terminal they retain classic menu activation. `Ctrl-G m` is the
+focus-independent keyboard path to the menu.
 
 Right-click a pane for a context menu (including **Open Files Here** on
 SSH panes, plus split / zoom / rename / send signal / respawn / kill).
@@ -330,6 +352,12 @@ Left-click a non-focused pane to focus it.
 All files live under `~/.config/fvmux/` (or `$XDG_CONFIG_HOME/fvmux/`).
 Runtime state lives under `~/.local/state/fvmux/`. fvmux creates these
 on first launch and seeds annotated templates.
+
+Run `fvmux --check-config` for non-interactive validation of
+`config.toml`, `profiles.toml`, `hosts.toml`, themes, and
+`keybindings.toml`. Syntax errors, unknown commands, wrong prefixes,
+alias collisions, displaced commands, and portability warnings include the
+offending binding index.
 
 ### `config.toml`
 
@@ -402,19 +430,21 @@ Override or unbind chords without recompiling. Use the command's
 `Name` (not its menu label) to identify it.
 
 ```toml
-# Rebind Ctrl-G x → Ctrl-G X.
+# Rebind prefix+x → prefix+X.
 [[binding]]
-chord   = "C-g X"
+chord   = "<prefix> X"
 command = "Kill Pane"
 
 # Unbind a chord — empty command removes whatever currently owns it.
 [[binding]]
-chord   = "C-g x"
+chord   = "<prefix> x"
 command = ""
 ```
 
-Help → Reload Config picks changes up immediately. Unknown command
-names are skipped silently.
+Help → Reload Config picks changes up immediately. `<prefix>`, factory
+`C-g`, and the active prefix spelling are accepted. Invalid keys and
+unknown commands are skipped with errors; legal binding collisions remain
+last-entry-wins but report exactly which command became unbound.
 
 ### `hosts.toml`
 
@@ -662,7 +692,6 @@ A small list of deliberate easter eggs, each chosen to be polite
 - Opening a new window on a Friday at or after 17:00 local flashes
   "ship it" in the focused-pane slot of the status bar for 4 s.
 - The cheatsheet footer carries a daily-rotating tagline.
-- Triple-`Ctrl-G` within 1.5 s replays the first-run wizard.
 - `Ctrl-G :` then `:tea` schedules a notification after 180 s
   (cancellable by closing the notification or quitting).
 - `Ctrl-G :` then `:rot13` runs the focused pane's terminal output
@@ -770,8 +799,8 @@ described in [`test/smoke/sftp.md`](test/smoke/sftp.md).
 
 ### CI
 
-`.github/workflows/ci.yml` runs gofmt + vet + test + race + lint +
-govulncheck + cross-compile on PR and `main`.
+`.github/workflows/ci.yml` runs native build + vet + test on Linux,
+macOS, and Windows; race, gofmt, lint, and govulncheck remain Linux jobs.
 
 `.github/workflows/release.yml` triggers on `v*` tag push. It re-runs
 the same verify steps as the gate, builds binaries for linux/amd64,
@@ -811,6 +840,19 @@ What's still rough in v1 alpha — none block daily use:
   falls back to the hex view.
 - **Ctrl-Shift-P** as a standalone palette chord isn't wired — would
   need a non-prefix dispatch path. `Ctrl-G P` is the only way in.
+- **Enhanced keyboard protocols are not negotiated.** fvmux targets
+  legacy xterm-compatible input. Do not force kitty keyboard protocol,
+  CSI-u, or `modifyOtherKeys` for the fvmux process. Classic aliases
+  such as Ctrl-I/Tab remain inherent, although configuration
+  canonicalization prevents duplicate dead bindings. Inner applications
+  still receive fv-go v0.5.4's improved classic modified-key encodings.
+
+The tested letter-oriented
+[`assets/keybindings-portable.toml`](assets/keybindings-portable.toml)
+is available for German and other punctuation/AltGr-heavy layouts.
+Overrides move a command's single binding rather than adding an alias.
+See the [terminal compatibility matrix](docs/terminal-compatibility.md)
+for release verification status and emulator-specific settings.
 
 The list above is the complete remaining v1 backlog after Phases
 A–M. Anything not listed is shipped.

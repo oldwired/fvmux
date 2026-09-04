@@ -4,7 +4,10 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
+	"github.com/oldwired/fv-go/pkg/fv/term"
 	"github.com/oldwired/fv-go/pkg/fv/views"
+
+	"github.com/oldwired/fvmux/internal/keys"
 )
 
 // ResizeView is a sticky-mode OfPreProcess listener: while installed,
@@ -41,8 +44,15 @@ func (v *ResizeView) HandleEvent(ev *drivers.Event) {
 		v.Base.HandleEvent(ev)
 		return
 	}
-	special := specialAtom(ev.KeyCode)
-	if v.OnKey(ev.UnicodeChar, special) {
+	id := ev.EffectiveKey()
+	r := id.Rune
+	special := ""
+	if id.Key != term.KeyNone {
+		if step, ok := keys.StepFromIdentity(id); ok {
+			special = keys.FormatStep(step)
+		}
+	}
+	if v.OnKey(r, special) {
 		ev.Clear()
 	}
 }

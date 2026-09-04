@@ -11,6 +11,7 @@ package sshmgr
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -216,6 +217,47 @@ type hostTOML struct {
 	Port  int      `toml:"port"`
 	Tags  []string `toml:"tags"`
 	Notes string   `toml:"notes"`
+}
+
+// ValidateHostsFile performs the semantic checks loadHostsTOML historically
+// handled leniently for interactive compatibility. The non-interactive config
+// checker uses it so skipped entries and corrected ports are never silent.
+func ValidateHostsFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var hf HostsFile
+	if err := toml.Unmarshal(data, &hf); err != nil {
+		return err
+	}
+	seen := map[string]int{}
+	var diagnostics []string
+	for i, host := range hf.Hosts {
+		index := i + 1
+		alias := strings.TrimSpace(host.Alias)
+		if alias == "" {
+			diagnostics = append(diagnostics, fmt.Sprintf("host %d has no alias", index))
+			continue
+		}
+		if previous := seen[alias]; previous != 0 {
+			diagnostics = append(diagnostics, fmt.Sprintf("host %d duplicates alias %q from host %d", index, alias, previous))
+		}
+		seen[alias] = index
+		if host.Port < 0 || host.Port > 65535 {
+			diagnostics = append(diagnostics, fmt.Sprintf("host %d (%s) has port %d outside 0..65535", index, alias, host.Port))
+		}
+	}
+	if len(diagnostics) > 0 {
+		return errors.New(strings.Join(diagnostics, "; "))
+	}
+	return nil
 }
 
 func loadHostsTOML(path string) ([]*Host, error) {

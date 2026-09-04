@@ -12,15 +12,20 @@ import (
 )
 
 func main() {
-	out := filepath.Join("..", "..", "assets", "cheatsheet.md")
 	body := cheatsheet.GenerateBaked(commands.Defaults())
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, "genmd:", err)
-		os.Exit(1)
+	outputs := []string{
+		filepath.Join("..", "..", "assets", "cheatsheet.md"),
+		filepath.Join("..", "..", "KEYBINDINGS.md"),
 	}
-	if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "genmd:", err)
-		os.Exit(1)
+	for _, out := range outputs {
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "genmd:", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(out, []byte(body), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "genmd:", err)
+			os.Exit(1)
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "wrote %s (%d bytes)\n", out, len(body))
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "wrote %s (%d bytes)\n", out, len(body))
 }
