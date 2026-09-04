@@ -100,6 +100,7 @@
 - `C-g F` — Files Window…
 - Open Files Here
 - Open Another Files Window Here
+- Follow Terminal Directory
 - Copy to Other Side (F5)
 - Move / Rename (F6)
 - Active Transfers…

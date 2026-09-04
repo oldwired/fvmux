@@ -43,6 +43,11 @@ type fileWindowState struct {
 	RemoteCWD string
 	LocalCWD  string
 	FocusSide string
+	// OriginPaneID binds this Files window to the terminal pane it was opened
+	// from. FollowTerminal is deliberately per window, so several browsers for
+	// one SSH alias can independently follow different terminal panes.
+	OriginPaneID   session.PaneID
+	FollowTerminal bool
 
 	State       fileConnectState
 	Detail      string
@@ -74,7 +79,11 @@ func (fw *fileWindowState) displayTitle() string {
 	case filesCancelled:
 		suffix = "Cancelled"
 	}
-	return fmt.Sprintf("[%s] Files — %s", fw.Alias, suffix)
+	relation := ""
+	if fw.FollowTerminal {
+		relation = " ↔ Terminal"
+	}
+	return fmt.Sprintf("[%s] Files%s — %s", fw.Alias, relation, suffix)
 }
 
 func (fw *fileWindowState) stateLabel() string {
@@ -150,6 +159,7 @@ func (m *Mux) openFilesHere(forceNew bool) {
 	alias, cwd := leaf.Pane.SSHAlias, leaf.Pane.CWD
 	if !forceNew {
 		if fw := m.filesForAlias(alias); fw != nil {
+			fw.OriginPaneID = leaf.Pane.ID
 			if cwd != "" {
 				fw.RemoteCWD = cwd
 				if fw.Browser != nil {
@@ -159,10 +169,122 @@ func (m *Mux) openFilesHere(forceNew bool) {
 				}
 			}
 			m.focusWindowView(fw.Frame.Self())
+			m.warnUnknownTerminalCWD(cwd, true)
 			return
 		}
 	}
-	m.openFilesWindow(alias, cwd, "", "remote", nil, 0)
+	fw := m.openFilesWindow(alias, cwd, "", "remote", nil, 0)
+	if fw != nil {
+		fw.OriginPaneID = leaf.Pane.ID
+	}
+	m.warnUnknownTerminalCWD(cwd, false)
+}
+
+func (m *Mux) warnUnknownTerminalCWD(cwd string, reused bool) {
+	if cwd != "" {
+		return
+	}
+	message := "Terminal has not reported its directory (OSC 7); Files opened at remote home"
+	if reused {
+		message = "Terminal has not reported its directory (OSC 7); Files kept its current folder"
+	}
+	m.setFlash(message, 4*time.Second, flashPrioCommand)
+	m.refreshStatusBar()
+}
+
+// paneByID resolves the current terminal behind a runtime-only Files link.
+// Pane IDs survive splits, joins, and break-outs, unlike window/leaf pointers.
+func (m *Mux) paneByID(id session.PaneID) *session.Pane {
+	if id == 0 {
+		return nil
+	}
+	for _, ws := range m.windows {
+		if ws == nil || ws.Root == nil {
+			continue
+		}
+		if leaf := ws.Root.FindByID(id); leaf != nil {
+			return leaf.Pane
+		}
+	}
+	return nil
+}
+
+func (m *Mux) followFilesForPane(pane *session.Pane, cwd string) {
+	if pane == nil || cwd == "" {
+		return
+	}
+	for _, fw := range m.fileWindows {
+		if fw == nil || fw.closing || !fw.FollowTerminal || fw.OriginPaneID != pane.ID {
+			continue
+		}
+		fw.RemoteCWD = cwd
+		if fw.Browser != nil {
+			fw.Browser.NavigateRemote(cwd)
+		}
+		if fw.Frame != nil {
+			fw.Frame.SetTitle(fw.displayTitle())
+		}
+	}
+}
+
+// detachFilesFromPane preserves companion Files windows when their terminal is
+// removed, but clears a link that can no longer receive directory updates.
+// The browser remains usable at its current folder.
+func (m *Mux) detachFilesFromPane(id session.PaneID) {
+	if id == 0 {
+		return
+	}
+	for _, fw := range m.fileWindows {
+		if fw == nil || fw.OriginPaneID != id {
+			continue
+		}
+		fw.OriginPaneID = 0
+		fw.FollowTerminal = false
+		if fw.Frame != nil {
+			fw.Frame.SetTitle(fw.displayTitle())
+		}
+	}
+}
+
+// rebindFilesFromPane treats Respawn as replacement rather than removal. Each
+// Files window keeps its own follow toggle, including when several originated
+// from the same pane.
+func (m *Mux) rebindFilesFromPane(oldID session.PaneID, replacement *session.Pane) {
+	if oldID == 0 || replacement == nil {
+		return
+	}
+	for _, fw := range m.fileWindows {
+		if fw != nil && fw.OriginPaneID == oldID {
+			fw.OriginPaneID = replacement.ID
+		}
+	}
+}
+
+func (m *Mux) toggleFilesFollowTerminal() {
+	fw := m.currentFileWindow()
+	if fw == nil {
+		return
+	}
+	pane := m.paneByID(fw.OriginPaneID)
+	if pane == nil {
+		return
+	}
+	fw.FollowTerminal = !fw.FollowTerminal
+	if fw.FollowTerminal && pane.CWD != "" {
+		m.followFilesForPane(pane, pane.CWD)
+	}
+	if fw.Frame != nil {
+		fw.Frame.SetTitle(fw.displayTitle())
+	}
+	message := "Files directory follow disabled"
+	if fw.FollowTerminal {
+		message = "Files now follows this terminal's directory"
+		if pane.CWD == "" {
+			message += " (waiting for OSC 7)"
+		}
+	}
+	m.setFlash(message, 3*time.Second, flashPrioCommand)
+	m.refreshStatusBar()
 }
 
 // openFilesWindow creates the numbered workspace surface immediately, before
@@ -286,6 +408,15 @@ func (m *Mux) beginFilesConnect(fw *fileWindowState) {
 			fw.Browser = browser
 			fw.State = filesReady
 			fw.RemoteCWD, fw.LocalCWD, fw.FocusSide = browser.RemoteCWD(), browser.LocalCWD(), browser.FocusSide()
+			// The terminal may have changed directory while the connection or
+			// authentication handoff was in flight. A following Files window
+			// catches up to the newest OSC-7 value as soon as it becomes ready.
+			if fw.FollowTerminal {
+				if pane := m.paneByID(fw.OriginPaneID); pane != nil && pane.CWD != "" && pane.CWD != fw.RemoteCWD {
+					fw.RemoteCWD = pane.CWD
+					browser.NavigateRemote(pane.CWD)
+				}
+			}
 			fw.Frame.SetTitle(fw.displayTitle())
 			m.setFlash(fmt.Sprintf("Files for [%s] are ready in window %d", fw.Alias, fw.Number), 2500*time.Millisecond, flashPrioCommand)
 			m.refreshStatusBar()

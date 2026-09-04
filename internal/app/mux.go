@@ -311,6 +311,7 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdSFTPBrowser, m.sftpBrowser)
 	bind(commands.CmdSFTPHere, func() { m.openFilesHere(false) })
 	bind(commands.CmdSFTPNewHere, func() { m.openFilesHere(true) })
+	bind(commands.CmdToggleFilesFollow, m.toggleFilesFollowTerminal)
 	bind(commands.CmdUploadFile, m.transferHintUpload)
 	bind(commands.CmdDownloadFile, m.transferHintDownload)
 	bind(commands.CmdActiveTransfers, m.showActiveTransfers)
@@ -444,7 +445,11 @@ func (m *Mux) sftpBrowser() {
 			m.focusWindowView(existing.Frame.Self())
 			return
 		}
-		m.openFilesWindow(alias, leaf.Pane.CWD, "", "remote", nil, 0)
+		fw := m.openFilesWindow(alias, leaf.Pane.CWD, "", "remote", nil, 0)
+		if fw != nil {
+			fw.OriginPaneID = leaf.Pane.ID
+		}
+		m.warnUnknownTerminalCWD(leaf.Pane.CWD, false)
 		return
 	}
 	hosts, _ := sshmgr.Load(m.Opts.Paths.HostsFile())
@@ -716,7 +721,11 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane) {
 		ws.ShellTitle = s
 		m.refreshWindowTitle(ws)
 	}
-	t.OnCWDChange = func(cwd string) { pane.CWD = cwd }
+	t.OnCWDChange = func(cwd string) {
+		pane.CWD = cwd
+		m.followFilesForPane(pane, cwd)
+		m.refreshStatusBar()
+	}
 	t.OnActivity = func() { pane.Activity = time.Now() }
 	t.OnBell = func() { m.flashOnBell(pane) }
 	t.OnExit = func(err error) {
@@ -776,8 +785,10 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 			preferred = layout.RemovalSuccessor(leaf)
 		}
 		m.stopPane(leaf.Pane)
+		removedPaneID := leaf.Pane.ID
 		var removed bool
 		ws.Root, removed = layout.Close(ws.Root, leaf)
+		m.detachFilesFromPane(removedPaneID)
 		if removed {
 			m.removeWindow(ws)
 			return
@@ -1040,9 +1051,11 @@ func (m *Mux) doClose() {
 	preferred := layout.RemovalSuccessor(target)
 
 	m.stopPane(target.Pane)
+	removedPaneID := target.Pane.ID
 
 	var removed bool
 	ws.Root, removed = layout.Close(ws.Root, target)
+	m.detachFilesFromPane(removedPaneID)
 	if removed {
 		m.removeWindow(ws)
 		return
@@ -1324,6 +1337,9 @@ func (m *Mux) cleanupWindow(ws *windowState) {
 	if ws.Root != nil {
 		ws.Root.Leaves(func(l *layout.PaneNode) {
 			m.stopPane(l.Pane)
+			if l.Pane != nil {
+				m.detachFilesFromPane(l.Pane.ID)
+			}
 		})
 	}
 	if ws.Frame == nil {

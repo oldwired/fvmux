@@ -26,15 +26,18 @@ func Materialize(root *PaneNode, bounds geom.Rect, zoomed *session.PaneID) views
 		return nil
 	}
 	updateLeafRects(root, bounds)
+	showPaneHeadings := len(root.CollectLeaves()) > 1
 	var top views.View
 	if zoomed != nil {
 		if l := root.FindByID(*zoomed); l != nil && l.Pane != nil {
-			detach(l.Pane.Term)
-			top = l.Pane.Term
+			// The window title already identifies the only visible pane while
+			// zoomed; keep its terminal full-height and restore headings when
+			// the split tree becomes visible again.
+			top = materializeLeaf(l.Pane, bounds, false, false)
 		}
 	}
 	if top == nil {
-		top = materializeView(root, bounds)
+		top = materializeView(root, bounds, showPaneHeadings, false)
 	}
 	if top != nil {
 		// The window inserts this view directly and, on a mouse-drag
@@ -52,16 +55,15 @@ func Materialize(root *PaneNode, bounds geom.Rect, zoomed *session.PaneID) views
 	return top
 }
 
-func materializeView(n *PaneNode, bounds geom.Rect) views.View {
+func materializeView(n *PaneNode, bounds geom.Rect, showPaneHeadings, hasDividerAbove bool) views.View {
 	if n.Kind == NodeLeaf {
-		v := views.View(n.Pane.Term)
-		detach(v)
-		return v
+		return materializeLeaf(n.Pane, bounds, showPaneHeadings, hasDividerAbove)
 	}
 	splitPos := splitPosFor(bounds, n.Orientation, n.Ratio)
 	leftR, rightR := childRects(bounds, n.Orientation, splitPos)
-	p1 := materializeView(n.A, leftR)
-	p2 := materializeView(n.B, rightR)
+	p1 := materializeView(n.A, leftR, showPaneHeadings, hasDividerAbove)
+	rightHasDividerAbove := hasDividerAbove || n.Orientation == views.SplitHorizontal
+	p2 := materializeView(n.B, rightR, showPaneHeadings, rightHasDividerAbove)
 	sg := views.NewSplitGroup(bounds, n.Orientation, splitPos)
 	// fv-go v0.5.2 reports accepted mouse drags after synchronizing the
 	// SplitGroup's own SplitPos. Capture this exact model node so nested
@@ -75,6 +77,22 @@ func materializeView(n *PaneNode, bounds geom.Rect) views.View {
 	}
 	sg.SetPanels(p1, p2)
 	return sg
+}
+
+func materializeLeaf(pane *session.Pane, bounds geom.Rect, showPaneHeading, hasDividerAbove bool) views.View {
+	v := views.View(pane.Term)
+	detach(v)
+	// A terminal normally gets its bounds from the SplitGroup that owns it.
+	// When a split collapses (Close / Break Out), however, the leaf is
+	// inserted directly into a Window and there is no parent splitter to
+	// replace its old child-relative rectangle. Always seed the requested
+	// bounds here; an enclosing SplitGroup will still overwrite them with its
+	// own local panel rectangle during SetPanels.
+	v.ChangeBounds(bounds)
+	if !showPaneHeading {
+		return v
+	}
+	return newPaneView(bounds, pane, hasDividerAbove)
 }
 
 func updateLeafRects(n *PaneNode, bounds geom.Rect) {

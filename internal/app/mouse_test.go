@@ -126,6 +126,67 @@ func TestClickReRaisesMouseListener(t *testing.T) {
 	}
 }
 
+// TestLeftClickMovesPaneFocus exercises the complete desktop dispatch path,
+// including the transparent MouseView and the Window below it. A unit test of
+// handleMouseDown alone would miss z-order/fall-through regressions.
+func TestLeftClickMovesPaneFocus(t *testing.T) {
+	var scheduled []func()
+	views.SetCallSoon(func(fn func()) { scheduled = append(scheduled, fn) })
+	defer views.SetCallSoon(nil)
+	drainScheduled := func() {
+		pending := scheduled
+		scheduled = nil
+		for _, fn := range pending {
+			fn()
+		}
+	}
+
+	desk := fvapp.NewDesktop(geom.NewRect(0, 0, 100, 30))
+	m := &Mux{
+		App:         &fvapp.Application{Program: &fvapp.Program{Desktop: desk}},
+		windows:     map[views.View]*windowState{},
+		lastSSHPane: map[string]*session.Pane{},
+	}
+	w := views.NewWindow(geom.NewRect(5, 3, 85, 27), "click", 1)
+	a, b := termPane(), termPane()
+	left, right := layout.Leaf(a), layout.Leaf(b)
+	root := layout.Split(views.SplitVertical, left, right)
+	ws := &windowState{ID: session.NewWindowID(), Number: 1, Frame: w, Root: root, Focus: left}
+	w.Insert(layout.Materialize(root, windowInterior(w), nil))
+	m.registerWindow(w, ws)
+	m.installMouseListener()
+	if !m.setPaneFocus(ws, left) {
+		t.Fatal("could not establish initial left-pane focus")
+	}
+
+	point := geom.Point{
+		X: w.BaseView().Origin.X + right.Pane.LastRect.A.X + 1,
+		Y: w.BaseView().Origin.Y + right.Pane.LastRect.A.Y + 1,
+	}
+	ev := drivers.Event{What: consts.EvMouseDown, Buttons: consts.MbLeftButton, Where: point}
+	desk.HandleEvent(&ev)
+	drainScheduled()
+
+	if ws.Focus != right {
+		t.Fatalf("left click focus = %v, want clicked right pane %v", ws.Focus, right)
+	}
+	if got := right.Pane.Term.BaseView().Owner.Current(); got != views.View(right.Pane.Term) {
+		t.Fatalf("clicked terminal is not focused in its split: got %T", got)
+	}
+
+	// Reproduce a desynchronised logical/view focus after structural UI work:
+	// ws.Focus says right while fv-go's nested groups still point left. Clicking
+	// the logical pane again must repair the real input route.
+	m.setPaneFocus(ws, left)
+	ws.Focus = right
+	ev = drivers.Event{What: consts.EvMouseDown, Buttons: consts.MbLeftButton, Where: point}
+	desk.HandleEvent(&ev)
+	drainScheduled()
+	if !right.Pane.Term.GetState(consts.SfFocused) {
+		t.Fatal("click on logically-focused pane did not repair fv-go focus path")
+	}
+}
+
 // TestFindLeafFollowsWindowResize is the regression for click-to-focus
 // breaking after a window is resized. A mouse-drag resize stretches the
 // panes live but does not rebuild the tree, so Pane.LastRect — the click

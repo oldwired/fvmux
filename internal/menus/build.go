@@ -192,6 +192,7 @@ func transferMenu(reg *commands.Registry, extras Extras) *fvmenus.Menu {
 		item(reg, commands.CmdSFTPBrowser),
 		item(reg, commands.CmdSFTPHere),
 		item(reg, commands.CmdSFTPNewHere),
+		item(reg, commands.CmdToggleFilesFollow),
 		sep(),
 		item(reg, commands.CmdUploadFile),
 		item(reg, commands.CmdDownloadFile),

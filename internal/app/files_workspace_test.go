@@ -6,6 +6,9 @@ import (
 	fvapp "github.com/oldwired/fv-go/pkg/fv/app"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
+
+	"github.com/oldwired/fvmux/internal/layout"
+	"github.com/oldwired/fvmux/internal/session"
 )
 
 func TestFilesForAliasReturnsMostRecentMatchingWorkspaceWindow(t *testing.T) {
@@ -64,5 +67,96 @@ func TestFilesWindowParticipatesInNumberLookup(t *testing.T) {
 	}
 	if got := m.nextWindowNumber(); got != 1 {
 		t.Fatalf("next number=%d, want 1", got)
+	}
+}
+
+func TestFilesFollowIsPaneScopedNotAliasScoped(t *testing.T) {
+	paneA := &session.Pane{ID: session.NewPaneID(), SSHAlias: "prod"}
+	paneB := &session.Pane{ID: session.NewPaneID(), SSHAlias: "prod"}
+	followA := &fileWindowState{Alias: "prod", OriginPaneID: paneA.ID, FollowTerminal: true, RemoteCWD: "/old-a"}
+	followA2 := &fileWindowState{Alias: "prod", OriginPaneID: paneA.ID, FollowTerminal: true, RemoteCWD: "/other-a"}
+	followB := &fileWindowState{Alias: "prod", OriginPaneID: paneB.ID, FollowTerminal: true, RemoteCWD: "/old-b"}
+	unlinked := &fileWindowState{Alias: "prod", OriginPaneID: paneA.ID, RemoteCWD: "/manual"}
+	m := &Mux{fileWindows: map[views.View]*fileWindowState{
+		views.NewBackground(geom.Rect{}, 'a'): followA,
+		views.NewBackground(geom.Rect{}, 'd'): followA2,
+		views.NewBackground(geom.Rect{}, 'b'): followB,
+		views.NewBackground(geom.Rect{}, 'c'): unlinked,
+	}}
+
+	m.followFilesForPane(paneA, "/srv/a")
+
+	if followA.RemoteCWD != "/srv/a" {
+		t.Fatalf("matching Files cwd=%q, want /srv/a", followA.RemoteCWD)
+	}
+	if followA2.RemoteCWD != "/srv/a" {
+		t.Fatalf("second Files window from same pane cwd=%q, want /srv/a", followA2.RemoteCWD)
+	}
+	if followB.RemoteCWD != "/old-b" {
+		t.Fatalf("same-alias different-pane Files moved to %q", followB.RemoteCWD)
+	}
+	if unlinked.RemoteCWD != "/manual" {
+		t.Fatalf("follow-disabled Files moved to %q", unlinked.RemoteCWD)
+	}
+}
+
+func TestFilesLinksDetachOnPaneRemovalAndRebindOnRespawn(t *testing.T) {
+	oldPane := &session.Pane{ID: session.NewPaneID()}
+	replacement := &session.Pane{ID: session.NewPaneID()}
+	following := &fileWindowState{OriginPaneID: oldPane.ID, FollowTerminal: true}
+	manual := &fileWindowState{OriginPaneID: oldPane.ID}
+	m := &Mux{fileWindows: map[views.View]*fileWindowState{
+		views.NewBackground(geom.Rect{}, 'a'): following,
+		views.NewBackground(geom.Rect{}, 'b'): manual,
+	}}
+
+	m.rebindFilesFromPane(oldPane.ID, replacement)
+	if following.OriginPaneID != replacement.ID || manual.OriginPaneID != replacement.ID {
+		t.Fatalf("respawn did not preserve origins: following=%d manual=%d want=%d",
+			following.OriginPaneID, manual.OriginPaneID, replacement.ID)
+	}
+	if !following.FollowTerminal {
+		t.Fatal("respawn unexpectedly disabled an active Files link")
+	}
+
+	m.detachFilesFromPane(replacement.ID)
+	if following.OriginPaneID != 0 || following.FollowTerminal {
+		t.Fatalf("removed source left stale link: origin=%d follow=%v",
+			following.OriginPaneID, following.FollowTerminal)
+	}
+	if manual.OriginPaneID != 0 {
+		t.Fatalf("removed source left stale manual origin=%d", manual.OriginPaneID)
+	}
+}
+
+func TestToggleFilesFollowUsesOriginTerminalCWD(t *testing.T) {
+	desk := fvapp.NewDesktop(geom.NewRect(0, 0, 120, 40))
+	terminalFrame := views.NewWindow(geom.NewRect(0, 0, 60, 20), "terminal", 1)
+	filesFrame := views.NewWindow(geom.NewRect(5, 3, 105, 35), "files", 2)
+	pane := &session.Pane{ID: session.NewPaneID(), SSHAlias: "prod", CWD: "/srv/app"}
+	leaf := layout.Leaf(pane)
+	ws := &windowState{Frame: terminalFrame, Root: leaf, Focus: leaf, Number: 1}
+	fw := &fileWindowState{Frame: filesFrame, Alias: "prod", Number: 2, OriginPaneID: pane.ID, RemoteCWD: "/home/me", State: filesReady}
+	m := &Mux{
+		App:         &fvapp.Application{Program: &fvapp.Program{Desktop: desk}},
+		windows:     map[views.View]*windowState{terminalFrame.Self(): ws},
+		fileWindows: map[views.View]*fileWindowState{filesFrame.Self(): fw},
+	}
+	desk.InsertWindow(terminalFrame)
+	desk.InsertWindow(filesFrame)
+	desk.Focus(filesFrame)
+
+	m.toggleFilesFollowTerminal()
+
+	if !fw.FollowTerminal || fw.RemoteCWD != "/srv/app" {
+		t.Fatalf("follow=%v cwd=%q, want enabled at originating pane cwd", fw.FollowTerminal, fw.RemoteCWD)
+	}
+	if got := fw.displayTitle(); got != "[prod] Files ↔ Terminal — /srv/app" {
+		t.Fatalf("linked title=%q", got)
+	}
+
+	m.toggleFilesFollowTerminal()
+	if fw.FollowTerminal {
+		t.Fatal("second toggle did not disable directory follow")
 	}
 }

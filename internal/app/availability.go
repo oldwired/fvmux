@@ -49,6 +49,10 @@ func (m *Mux) wireCommandAvailability() {
 		leaf := m.availabilityPane()
 		return leaf != nil && leaf.Pane != nil && leaf.Pane.SSHAlias != ""
 	}, commands.CmdSFTPHere, commands.CmdSFTPNewHere)
+	set("Files window has no originating terminal", func() bool {
+		fw := m.currentFileWindow()
+		return fw != nil && m.paneByID(fw.OriginPaneID) != nil
+	}, commands.CmdToggleFilesFollow)
 	set("focused pane is not running", hasLivePane,
 		commands.CmdLiteralPrefix, commands.CmdEnterCopyMode, commands.CmdPaste,
 		commands.CmdFindScrollback, commands.CmdSendSIGINT, commands.CmdSendSIGQUIT,

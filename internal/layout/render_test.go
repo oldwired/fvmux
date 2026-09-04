@@ -2,11 +2,13 @@ package layout
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
 	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
+	"github.com/oldwired/fv-go/pkg/fv/term"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
 
@@ -46,6 +48,121 @@ func TestMaterializeBodyGrowMode(t *testing.T) {
 	if got := split.BaseView().GrowMode; got != fillGrow {
 		t.Errorf("split body GrowMode = %#x, want %#x (GfGrowAll=%#x glues it to the corner)",
 			got, fillGrow, consts.GfGrowAll)
+	}
+}
+
+func TestMaterializeSplitAddsCompactPaneHeadings(t *testing.T) {
+	bounds := geom.NewRect(1, 1, 81, 21)
+	a, b := newTermPane(), newTermPane()
+	a.SSHAlias, a.UserTitle = "prod", "logs"
+	left := Leaf(a)
+	root := SplitH(left, left, b)
+
+	body := Materialize(root, bounds, nil)
+	split, ok := body.(*views.SplitGroup)
+	if !ok {
+		t.Fatalf("body = %T, want *views.SplitGroup", body)
+	}
+	leftView, ok := split.Panel1.(*paneView)
+	if !ok {
+		t.Fatalf("left panel = %T, want heading-bearing paneView", split.Panel1)
+	}
+	if got := paneCaption(a); got != "prod · logs" {
+		t.Fatalf("SSH pane caption = %q, want connection and pane names", got)
+	}
+	if leftView.header.Size.Y != 1 || a.Term.Origin.Y != 1 {
+		t.Fatalf("heading geometry: header=%v terminal=%v; want one reserved top row",
+			leftView.header.GetBounds(), a.Term.GetBounds())
+	}
+	if a.Term.GetState(consts.SfFocused) || b.Term.GetState(consts.SfFocused) {
+		t.Fatal("materialization left provisional focus flags on inactive pane branches")
+	}
+
+	// Very short panes retain usable terminal space instead of spending a
+	// quarter or half of it on chrome.
+	leftView.ChangeBounds(geom.NewRect(0, 0, 20, 2))
+	if leftView.header.GetState(consts.SfVisible) || a.Term.Origin.Y != 0 || a.Term.Size.Y != 2 {
+		t.Fatalf("tiny pane did not suppress heading: header-visible=%v terminal=%v",
+			leftView.header.GetState(consts.SfVisible), a.Term.GetBounds())
+	}
+}
+
+func TestStackedLowerPaneUsesExistingSplitterForHeading(t *testing.T) {
+	bounds := geom.NewRect(1, 1, 81, 21)
+	topPane, bottomPane := newTermPane(), newTermPane()
+	topPane.UserTitle, bottomPane.UserTitle = "top", "bottom"
+	root := Split(views.SplitHorizontal, Leaf(topPane), Leaf(bottomPane))
+
+	body := Materialize(root, bounds, nil)
+	split, ok := body.(*views.SplitGroup)
+	if !ok {
+		t.Fatalf("body = %T, want *views.SplitGroup", body)
+	}
+	topView, ok := split.Panel1.(*paneView)
+	if !ok {
+		t.Fatalf("top panel = %T, want paneView", split.Panel1)
+	}
+	bottomView, ok := split.Panel2.(*paneView)
+	if !ok {
+		t.Fatalf("bottom panel = %T, want paneView", split.Panel2)
+	}
+	if topPane.Term.Origin.Y != 1 {
+		t.Fatalf("top terminal origin y=%d, want one reserved heading row", topPane.Term.Origin.Y)
+	}
+	if bottomPane.Term.Origin.Y != 0 || bottomPane.Term.Size.Y != bottomView.Size.Y {
+		t.Fatalf("bottom terminal still paid for a heading row: pane=%v terminal=%v",
+			bottomView.GetBounds(), bottomPane.Term.GetBounds())
+	}
+	if !bottomView.overlayDivider || bottomView.header.Origin.Y != -1 {
+		t.Fatalf("bottom heading placement: overlay=%v origin=%v; want splitter row above",
+			bottomView.overlayDivider, bottomView.header.Origin)
+	}
+	if topView.overlayDivider {
+		t.Fatal("top pane unexpectedly tried to use a non-existent divider above it")
+	}
+}
+
+func TestPaneCaptionAvoidsDuplicateConnectionLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		pane *session.Pane
+		want string
+	}{
+		{name: "nil", want: "pane"},
+		{name: "local", pane: &session.Pane{UserTitle: "editor"}, want: "editor"},
+		{name: "connection only", pane: &session.Pane{SSHAlias: "prod"}, want: "prod"},
+		{name: "same fallback", pane: &session.Pane{SSHAlias: "prod", Title: "prod"}, want: "prod"},
+		{name: "connection and pane", pane: &session.Pane{SSHAlias: "prod", ShellTitle: "vim"}, want: "prod · vim"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := paneCaption(tt.pane); got != tt.want {
+				t.Fatalf("paneCaption() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPaneHeadingRendersConnectionPaneAndActiveMarker(t *testing.T) {
+	backend := term.NewHeadless(48, 8)
+	views.SetRootBackend(backend)
+	defer views.SetRootBackend(nil)
+
+	a, b := newTermPane(), newTermPane()
+	a.SSHAlias, a.UserTitle = "prod", "logs"
+	b.UserTitle = "local shell"
+	left := Leaf(a)
+	body := Materialize(SplitH(left, left, b), geom.NewRect(0, 0, 48, 8), nil)
+	a.Term.SetState(consts.SfFocused, true)
+	body.BaseView().State |= consts.SfExposed | consts.SfVisible
+	body.Draw()
+	_ = backend.Flush()
+	snapshot := backend.Snapshot()
+	if !strings.Contains(snapshot, "▸ prod · logs") {
+		t.Fatalf("rendered heading lacks active SSH identity:\n%s", snapshot)
+	}
+	if !strings.Contains(snapshot, "  local shell") {
+		t.Fatalf("rendered heading lacks inactive local pane identity:\n%s", snapshot)
 	}
 }
 

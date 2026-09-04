@@ -543,6 +543,18 @@ alias, or opens one at the pane's OSC-7 remote cwd. Outside an SSH pane it
 opens the host picker. The pane context menu adds **Open Files Here**
 (reuse and navigate) and **Open Another Files Window Here** (always create).
 
+Transfer → **Follow Terminal Directory** makes the focused Files window track
+the particular SSH terminal pane it was opened from. The association is by
+pane—not merely by SSH alias—so several Files windows for the same host remain
+unambiguous. The toggle belongs to each Files window: two browsers opened from
+the same terminal may both follow it, or either may be unlinked and navigated
+independently. Manual navigation in a linked browser lasts until the terminal
+reports its next directory change. Initial positioning and following require
+the remote shell to emit OSC 7 working-directory updates; when it does not,
+fvmux says so and falls back to the remote account home rather than silently
+implying that the paths match. Closing the originating terminal unlinks its
+Files windows without closing them; respawning it preserves their association.
+
 Files windows are ordinary numbered workspace windows: window list, number
 jumps, next/previous, MRU, arrange commands, status bar, and session restore
 all include them. Titles make the relationship explicit — for example,

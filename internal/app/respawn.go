@@ -41,6 +41,7 @@ func (m *Mux) respawnPane() {
 	}
 	// Release the dead pane's PTY before dropping the reference, so its
 	// file descriptors don't linger until GC.
+	m.rebindFilesFromPane(pane.ID, newPane)
 	m.stopPane(pane)
 	ws.Focus.Pane = newPane
 	m.setPaneFocus(ws, ws.Focus)

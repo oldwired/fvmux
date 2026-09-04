@@ -175,6 +175,7 @@ func Defaults() *Registry {
 	r.Register(&Command{ID: CmdSFTPBrowser, Category: "Transfer", Name: "Files Window…", MenuLabel: "~F~iles Window…", Chord: "C-g F"})
 	r.Register(&Command{ID: CmdSFTPHere, Category: "Transfer", Name: "Open Files Here", MenuLabel: "Open Files ~H~ere"})
 	r.Register(&Command{ID: CmdSFTPNewHere, Category: "Transfer", Name: "Open Another Files Window Here", MenuLabel: "Open Another Files ~W~indow Here"})
+	r.Register(&Command{ID: CmdToggleFilesFollow, Category: "Transfer", Name: "Follow Terminal Directory", MenuLabel: "Follow Terminal ~D~irectory"})
 	// F5/F6 are bidirectional inside the browser: F5 copies the highlighted
 	// entry to the other side, F6 moves/renames it. The names describe the
 	// keys, not an up/down direction. Hotkey markers stay unique within the

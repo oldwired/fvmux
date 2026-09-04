@@ -197,7 +197,11 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 	switch {
 	case ev.Buttons&consts.MbLeftButton != 0:
 		m.focusWindowView(ws.Frame.Self())
-		if leaf != ws.Focus && leaf.Pane != nil {
+		if leaf.Pane != nil {
+			// Re-apply even when the logical leaf already matches. A modal,
+			// rerender, or structural move can leave fv-go's nested focus path
+			// out of sync with ws.Focus; a click is an explicit request to
+			// reconcile both layers.
 			m.setPaneFocus(ws, leaf)
 		}
 		if debug.Mouse() {
@@ -211,7 +215,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		// otherwise target the occluded one beneath.
 		m.focusWindowView(ws.Frame.Self())
 		// Bring focus to the right-clicked pane before showing the menu.
-		if leaf != ws.Focus && leaf.Pane != nil {
+		if leaf.Pane != nil {
 			m.setPaneFocus(ws, leaf)
 		}
 		m.showPaneContextMenu(ev.Where)

@@ -85,13 +85,14 @@ const (
 	CmdReloadHosts       uint16 = 1043
 
 	// 1050s — transfer
-	CmdSFTPBrowser     uint16 = 1050 // Ctrl-G F
-	CmdUploadFile      uint16 = 1051 // Files window F6: move/rename.
-	CmdDownloadFile    uint16 = 1052 // Files window F5: copy to other side.
-	CmdActiveTransfers uint16 = 1053
-	CmdClearCompleted  uint16 = 1054
-	CmdSFTPHere        uint16 = 1055
-	CmdSFTPNewHere     uint16 = 1056
+	CmdSFTPBrowser       uint16 = 1050 // Ctrl-G F
+	CmdUploadFile        uint16 = 1051 // Files window F6: move/rename.
+	CmdDownloadFile      uint16 = 1052 // Files window F5: copy to other side.
+	CmdActiveTransfers   uint16 = 1053
+	CmdClearCompleted    uint16 = 1054
+	CmdSFTPHere          uint16 = 1055
+	CmdSFTPNewHere       uint16 = 1056
+	CmdToggleFilesFollow uint16 = 1057
 
 	// 1060s — help / meta
 	CmdCommandPalette uint16 = 1060 // Ctrl-G P
