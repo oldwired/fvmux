@@ -41,15 +41,17 @@ func Defaults() *Registry {
 	r.Register(&Command{
 		ID:        CmdSplitH,
 		Category:  "Pane",
-		Name:      "Split Horizontal",
-		MenuLabel: "Split ~H~orizontal",
+		Name:      "Split Left/Right",
+		Aliases:   []string{"Split Horizontal"},
+		MenuLabel: "Split Left/Ri~g~ht",
 		Chord:     "C-g %",
 	})
 	r.Register(&Command{
 		ID:        CmdSplitV,
 		Category:  "Pane",
-		Name:      "Split Vertical",
-		MenuLabel: "Split ~V~ertical",
+		Name:      "Split Top/Bottom",
+		Aliases:   []string{"Split Vertical"},
+		MenuLabel: "Split ~T~op/Bottom",
 		Chord:     "C-g \"",
 	})
 	r.Register(&Command{

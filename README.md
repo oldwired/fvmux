@@ -240,8 +240,8 @@ auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheat
 ### Pane layout
 | Chord | Action |
 |-------|--------|
-| `Ctrl-G %` | Split horizontal (vertical splitter, panes side-by-side) |
-| `Ctrl-G "` | Split vertical (horizontal splitter, panes stacked) |
+| `Ctrl-G %` | Split left/right (new pane beside the focused pane) |
+| `Ctrl-G "` | Split top/bottom (new pane below the focused pane) |
 | `Ctrl-G x` | Kill focused pane (confirms if alive) |
 | `Ctrl-G z` | Zoom / unzoom focused pane |
 | `Ctrl-G h j k l` | Focus pane in direction |
@@ -250,7 +250,7 @@ auto-generated cheatsheet (also baked into [`assets/cheatsheet.md`](assets/cheat
 | `Ctrl-G !` | Break focused pane out to a new window |
 | `Ctrl-G @` | Join a single-leaf window into this one (picks orientation) |
 | `Ctrl-G Space` | Cycle layout preset |
-| `Ctrl-G R` | Enter resize mode (`h/j/k/l` = 1 cell, `H/J/K/L` = 5; Esc exits) |
+| `Ctrl-G R` | Enter resize mode (`h/j/k/l` moves the divider on that side outward by 1 cell; uppercase moves 5; Esc exits) |
 
 Direct preset entries are also in **View → Layout Preset** (Even-H,
 Even-V, Main-H, Main-V, Tiled).
@@ -334,9 +334,10 @@ prefix_key         = "C-g"      # set by the first-run wizard.
 default_profile    = "shell"
 confirm_kill       = true       # ask before killing live panes / quitting.
 splash_enabled     = true
-connect_split      = "vertical" # Ctrl-G H: "vertical" stacks the new pane below
-                                # (like Ctrl-G "), "horizontal" places it beside
-                                # (like Ctrl-G %); "window" opens a floating window.
+inherit_cwd_on_split = true     # local splits inherit the focused pane's OSC-7 cwd;
+                                # SSH panes never donate a remote path.
+connect_split      = "vertical" # Legacy values: "vertical" = top/bottom,
+                                # "horizontal" = left/right, "window" = floating.
 new_window_command = ""         # non-empty ⇒ Ctrl-G c runs this via the system
                                 # shell (sh -c; cmd /c on Windows); empty ⇒
                                 # default_profile.

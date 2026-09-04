@@ -8,20 +8,19 @@ import (
 	"github.com/oldwired/fvmux/internal/statusbar"
 )
 
-// renamePane prompts for a new title and pins it to the focused
-// pane's Pane.Title. Until the shell next emits an OSC title, this
-// shows in the status-bar window list as a per-pane label.
+// renamePane prompts for a sticky user title. Clearing it reveals the pane's
+// current OSC shell title, then its profile fallback.
 func (m *Mux) renamePane() {
 	ws := m.currentWindow()
 	if ws == nil || ws.Focus == nil || ws.Focus.Pane == nil {
 		return
 	}
 	text, ok := promptString(m.App, "Rename Pane",
-		"Pane title (empty to clear):", ws.Focus.Pane.Title)
+		"Pane title (empty to clear):", ws.Focus.Pane.UserTitle)
 	if !ok {
 		return
 	}
-	ws.Focus.Pane.Title = text
+	ws.Focus.Pane.UserTitle = text
 	m.refreshWindowTitle(ws)
 	m.refreshStatusBar()
 }

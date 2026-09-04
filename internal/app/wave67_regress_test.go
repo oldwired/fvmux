@@ -18,8 +18,8 @@ import (
 // config with confirm-kill off) whose only profile — and whose default
 // shell ($SHELL) — is `cat`. cat with no stdin blocks forever: it never
 // exits and emits no output, so each pane's read/wait goroutines stay
-// parked and never fire the wireTerminalCallbacks handlers nor call
-// views.CallSoon. That is what keeps these real-PTY tests clean under
+// parked and never schedule callback work through views.CallSoon. That
+// is what keeps these real-PTY tests clean under
 // -race alongside the CallSoon-capturing tests in this package.
 //
 // The panes are intentionally NOT stopped at test end (mirroring

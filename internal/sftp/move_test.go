@@ -81,7 +81,7 @@ func TestStartTreeMove_MovesAndDeletesSourceTree(t *testing.T) {
 	if n != len(files) {
 		t.Fatalf("enqueued %d, want %d", n, len(files))
 	}
-	m.Wait() // drains transfers AND the finishMove deletion goroutine.
+	m.Wait() // drains transfers AND the finishTree deletion goroutine.
 
 	if got := readTree(t, dstRoot); !reflect.DeepEqual(got, files) {
 		t.Fatalf("moved tree mismatch:\n got=%v\nwant=%v", got, files)

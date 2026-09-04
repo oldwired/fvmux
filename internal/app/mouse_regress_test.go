@@ -12,20 +12,19 @@ import (
 )
 
 // TestFindLeafAtPoint_ZoomedExcludesHidden is the regression for finding
-// #10. In a zoomed window only the zoomed pane is on screen and only its
-// LastRect is refreshed by Materialize; the hidden panes keep stale rects
-// covering the same interior. findLeafAtPoint must skip every leaf but the
-// zoomed one, otherwise a click resolves to an invisible pane (and Ctrl-G x
-// would kill a process the user can't see).
+// #10. In a zoomed window only the zoomed pane is on screen, while LastRect
+// deliberately retains the unzoomed geometry used by directional focus.
+// findLeafAtPoint must therefore treat the visible pane as owning the whole
+// interior, otherwise clicks outside its old rectangle either miss or resolve
+// to an invisible pane (and Ctrl-G x could kill a process the user can't see).
 func TestFindLeafAtPoint_ZoomedExcludesHidden(t *testing.T) {
 	// Window at a non-zero desktop origin so we also exercise the
 	// global→window-local translation findLeafAtPoint performs.
 	w := views.NewWindow(geom.NewRect(10, 5, 90, 29), "z", 1) // 80x24 @ (10,5)
 	frameOrigin := w.BaseView().Origin
 
-	// paneA is the zoomed pane: Materialize would have written it the FULL
-	// interior. paneB keeps a stale right-half rect from before the zoom.
-	paneA := &session.Pane{ID: session.NewPaneID(), LastRect: geom.NewRect(1, 1, 79, 23)}
+	// paneA is the zoomed pane, but both panes retain their logical half.
+	paneA := &session.Pane{ID: session.NewPaneID(), LastRect: geom.NewRect(1, 1, 40, 23)}
 	paneB := &session.Pane{ID: session.NewPaneID(), LastRect: geom.NewRect(40, 1, 79, 23)}
 	leafA, leafB := layout.Leaf(paneA), layout.Leaf(paneB)
 	root := layout.Split(views.SplitVertical, leafA, leafB)
@@ -33,12 +32,10 @@ func TestFindLeafAtPoint_ZoomedExcludesHidden(t *testing.T) {
 	zid := paneA.ID
 	ws := &windowState{Frame: w, Root: root, Focus: leafA, Zoomed: &zid}
 
-	// A click deep in the right half. In window-local coords this lands
-	// inside BOTH rects — document the trap that made this a bug: without
-	// the zoom exclusion a last-match-wins walk would silently pick paneB.
+	// A click deep in the old right half must still land on visible pane A.
 	local := geom.Point{X: 60, Y: 12}
 	if !paneB.LastRect.Contains(local) {
-		t.Fatalf("test setup: stale paneB rect should contain %v so the "+
+		t.Fatalf("test setup: logical paneB rect should contain %v so the "+
 			"exclusion is actually load-bearing", local)
 	}
 	globalRight := geom.Point{X: frameOrigin.X + local.X, Y: frameOrigin.Y + local.Y}

@@ -47,8 +47,8 @@
 
 ## Pane
 
-- `C-g %` — Split Horizontal
-- `C-g "` — Split Vertical
+- `C-g %` — Split Left/Right
+- `C-g "` — Split Top/Bottom
 - `C-g x` — Kill Pane
 - `C-g h` — Focus Left
 - `C-g j` — Focus Down

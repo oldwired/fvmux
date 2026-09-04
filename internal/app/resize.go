@@ -1,7 +1,7 @@
 package app
 
 import (
-	"github.com/oldwired/fv-go/pkg/fv/views"
+	"time"
 
 	"github.com/oldwired/fvmux/internal/layout"
 	"github.com/oldwired/fvmux/internal/prefix"
@@ -70,43 +70,38 @@ func (m *Mux) handleResizeKey(r rune, special string) bool {
 	return true
 }
 
-func (m *Mux) resizeBy(dx, dy int) {
+func (m *Mux) resizeBy(dx, dy int) bool {
 	ws := m.currentWindow()
 	if ws == nil || ws.Focus == nil {
-		return
+		return false
 	}
-	sz := ws.Frame.Size
+	moved := false
+	direction := "that direction"
 	if dx != 0 {
-		adjustNearestSplit(ws.Focus, views.SplitVertical, sz.X, dx)
+		dir := layout.Right
+		direction = "right"
+		if dx < 0 {
+			dir = layout.Left
+			direction = "left"
+			dx = -dx
+		}
+		moved = layout.ResizeToward(ws.Focus, dir, dx)
 	}
 	if dy != 0 {
-		adjustNearestSplit(ws.Focus, views.SplitHorizontal, sz.Y, dy)
+		dir := layout.Down
+		direction = "down"
+		if dy < 0 {
+			dir = layout.Up
+			direction = "up"
+			dy = -dy
+		}
+		moved = layout.ResizeToward(ws.Focus, dir, dy) || moved
+	}
+	if !moved {
+		m.setFlash("no movable divider to the "+direction, 1200*time.Millisecond, flashPrioResize)
+		m.refreshStatusBar()
+		return false
 	}
 	m.rerender(ws)
-}
-
-// adjustNearestSplit walks up from leaf to the nearest enclosing split
-// of the requested orientation, then nudges its Ratio by deltaCells /
-// total. Clamped to (0.05, 0.95). Arrow semantics: h moves the boundary
-// left, l moves it right, k up, j down — independent of which side
-// the focused pane occupies.
-func adjustNearestSplit(leaf *layout.PaneNode, orient views.SplitOrientation, total int, deltaCells int) {
-	if total <= 0 || leaf == nil {
-		return
-	}
-	n := leaf
-	for n.Parent != nil {
-		if n.Parent.Orientation == orient {
-			r := n.Parent.Ratio + float64(deltaCells)/float64(total)
-			if r < 0.05 {
-				r = 0.05
-			}
-			if r > 0.95 {
-				r = 0.95
-			}
-			n.Parent.Ratio = r
-			return
-		}
-		n = n.Parent
-	}
+	return true
 }

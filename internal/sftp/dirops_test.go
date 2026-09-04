@@ -1,12 +1,44 @@
 package sftp
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestStartTreeRejectsDuplicateRootUntilWholeTreeFinishes(t *testing.T) {
+	c := newTestClient(t)
+	base := t.TempDir()
+	srcRoot := filepath.Join(base, "src")
+	writeTree(t, srcRoot, map[string]string{"one.txt": "one"})
+	dstRoot := filepath.Join(base, "dst")
+
+	m := NewManager("test")
+	m.SetParallel(1)
+	m.sem <- struct{}{} // keep the first tree's file transfer active.
+	released := false
+	defer func() {
+		if !released {
+			<-m.sem
+		}
+		m.CancelAll()
+		m.Wait()
+	}()
+
+	if n, err := m.StartTree(c, Upload, srcRoot, dstRoot); err != nil || n != 1 {
+		t.Fatalf("first StartTree = (%d, %v), want (1, nil)", n, err)
+	}
+	if _, err := m.StartTree(c, Upload, srcRoot, dstRoot); !errors.Is(err, ErrDestinationBusy) {
+		t.Fatalf("duplicate StartTree error = %v, want ErrDestinationBusy", err)
+	}
+
+	<-m.sem
+	released = true
+	m.Wait()
+}
 
 // writeTree materialises files (rel-path → contents) under root, creating
 // parent directories as needed.

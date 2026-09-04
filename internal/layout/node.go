@@ -3,12 +3,14 @@
 // Trees are strictly binary; CheckInvariants asserts this and six
 // other safety properties after every mutation.
 //
-// H/V naming convention follows tmux: SplitH produces a VERTICAL
-// splitter (panes side-by-side); SplitV produces a HORIZONTAL splitter
-// (panes stacked). Surprises every reader exactly once.
+// Internal H/V names retain the tmux-compatible serialized convention:
+// SplitH produces a vertical divider (left/right panes), while SplitV
+// produces a horizontal divider (top/bottom panes). User-facing labels
+// describe the visible arrangement instead.
 package layout
 
 import (
+	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 
 	"github.com/oldwired/fvmux/internal/session"
@@ -30,6 +32,10 @@ type PaneNode struct {
 	Ratio       float64                // (0,1) iff Kind == NodeSplit
 	A, B        *PaneNode              // valid iff Kind == NodeSplit
 	Parent      *PaneNode
+
+	// RenderRect is the most recent logical window-local bounds for this
+	// node. Runtime-only; keyboard resizing uses a split's own axis length.
+	RenderRect geom.Rect
 }
 
 // Leaf wraps p in a freshly-constructed leaf node.

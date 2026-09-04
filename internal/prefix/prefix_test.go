@@ -239,10 +239,10 @@ func TestPrefix_EnabledChordRunsAndConsumes(t *testing.T) {
 	}
 }
 
-// TestPrefix_UnboundChordPassesThrough documents the passthrough contract: a
-// second key that forms a chord string with no registry binding is left
-// untouched (NOT consumed) so it reaches the focused view.
-func TestPrefix_UnboundChordPassesThrough(t *testing.T) {
+// TestPrefix_UnboundChordIsConsumed pins the safety contract: once the user
+// presses a prefix, its second key is always command input and can never leak
+// into the focused PTY just because the chord was misspelled.
+func TestPrefix_UnboundChordIsConsumed(t *testing.T) {
 	r := commands.New()
 	r.Register(&commands.Command{
 		ID:     1,
@@ -251,17 +251,61 @@ func TestPrefix_UnboundChordPassesThrough(t *testing.T) {
 		Action: func(*commands.Ctx) {},
 	})
 	v := New(r, &commands.Ctx{}, Default)
+	var unknown string
+	v.OnUnknown = func(chord string) { unknown = chord }
 
 	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
 	ev := keyEvent(0, 'Q') // forms "C-g Q" — not bound
 	v.HandleEvent(ev)
 
-	if ev.What != consts.EvKeyboard {
-		t.Fatalf("an unbound chord's second key must pass through (not be consumed); ev.What = %#x, want EvKeyboard (%#x)",
-			ev.What, consts.EvKeyboard)
+	if ev.What != consts.EvNothing {
+		t.Fatalf("an unbound chord's second key must be consumed; ev.What = %#x, want EvNothing (%#x)",
+			ev.What, consts.EvNothing)
+	}
+	if unknown != "C-g Q" {
+		t.Fatalf("OnUnknown chord = %q, want %q", unknown, "C-g Q")
 	}
 	if v.Armed() {
 		t.Fatal("prefix should disarm after an unbound second key")
+	}
+}
+
+func TestPrefix_UnboundSpecialKeyIsConsumed(t *testing.T) {
+	reg, _, _ := newTestRegistry()
+	v := New(reg, &commands.Ctx{}, Default)
+	var unknown string
+	v.OnUnknown = func(chord string) { unknown = chord }
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	ev := keyEvent(consts.KbLeft, 0)
+	v.HandleEvent(ev)
+
+	if ev.What != consts.EvNothing {
+		t.Fatalf("unknown special key leaked; ev.What = %#x", ev.What)
+	}
+	if unknown != "C-g Left" {
+		t.Fatalf("OnUnknown chord = %q, want %q", unknown, "C-g Left")
+	}
+}
+
+func TestPrefix_DisabledChordReportsAndConsumes(t *testing.T) {
+	r := commands.New()
+	c := &commands.Command{ID: 1, Name: "Disabled", Chord: "C-g x",
+		Enabled: func(*commands.Ctx) bool { return false }}
+	r.Register(c)
+	v := New(r, &commands.Ctx{}, Default)
+	var got *commands.Command
+	v.OnUnavailable = func(command *commands.Command) { got = command }
+
+	v.HandleEvent(keyEvent(consts.KbCtrlG, 0))
+	ev := keyEvent(0, 'x')
+	v.HandleEvent(ev)
+
+	if ev.What != consts.EvNothing {
+		t.Fatalf("disabled chord leaked; ev.What = %#x", ev.What)
+	}
+	if got != c {
+		t.Fatalf("OnUnavailable command = %p, want %p", got, c)
 	}
 }
 

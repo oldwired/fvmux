@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/oldwired/fv-go/pkg/fv/geom"
+
+	"github.com/oldwired/fvmux/internal/session"
 )
 
 func TestLoad_MissingFileReturnsDefaults(t *testing.T) {
@@ -119,5 +121,26 @@ func TestExpandPath(t *testing.T) {
 func TestInstantiate_NilProfile(t *testing.T) {
 	if _, err := Instantiate(nil, geom.NewRect(0, 0, 80, 24), 0, ""); err == nil {
 		t.Fatal("Instantiate(nil) should error")
+	}
+}
+
+func TestInstantiate_ConfiguresPaneBeforeTerminalStart(t *testing.T) {
+	configured := false
+	p := &Profile{Name: "missing", Command: filepath.Join(t.TempDir(), "not-a-command")}
+	_, err := Instantiate(p, geom.NewRect(0, 0, 80, 24), 0, "",
+		func(pane *session.Pane) {
+			configured = true
+			if pane == nil || pane.Term == nil {
+				t.Fatal("configure hook received an incomplete pane")
+			}
+			if pane.Term.PID() != 0 {
+				t.Fatalf("terminal PID = %d in configure hook; Start already ran", pane.Term.PID())
+			}
+		})
+	if err == nil {
+		t.Fatal("Instantiate with a missing command should fail")
+	}
+	if !configured {
+		t.Fatal("configure hook did not run before the Start failure")
 	}
 }

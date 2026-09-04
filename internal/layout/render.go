@@ -13,9 +13,10 @@ import (
 // SplitGroup hierarchy otherwise). Every leaf's Pane.LastRect is
 // updated to the global rect it now occupies.
 //
-// If zoomed is non-nil and points at a leaf in the tree, only that
-// leaf is rendered, full-bounds. The rest of the tree is left alone
-// (siblings are skipped, but their cached LastRects are untouched).
+// If zoomed is non-nil and points at a leaf in the tree, only that leaf is
+// rendered full-bounds. LastRect continues to describe every leaf's logical,
+// unzoomed geometry so directional navigation remains predictable in zoom
+// mode; zoom-aware mouse hit-testing treats the visible pane as full-bounds.
 //
 // Each leaf's terminal is detached from its previous fv-go parent
 // before re-insertion, so callers can rebuild the tree on every layout
@@ -24,10 +25,10 @@ func Materialize(root *PaneNode, bounds geom.Rect, zoomed *session.PaneID) views
 	if root == nil {
 		return nil
 	}
+	updateLeafRects(root, bounds)
 	var top views.View
 	if zoomed != nil {
 		if l := root.FindByID(*zoomed); l != nil && l.Pane != nil {
-			l.Pane.LastRect = bounds
 			detach(l.Pane.Term)
 			top = l.Pane.Term
 		}
@@ -53,7 +54,6 @@ func Materialize(root *PaneNode, bounds geom.Rect, zoomed *session.PaneID) views
 
 func materializeView(n *PaneNode, bounds geom.Rect) views.View {
 	if n.Kind == NodeLeaf {
-		n.Pane.LastRect = bounds
 		v := views.View(n.Pane.Term)
 		detach(v)
 		return v
@@ -63,8 +63,35 @@ func materializeView(n *PaneNode, bounds geom.Rect) views.View {
 	p1 := materializeView(n.A, leftR)
 	p2 := materializeView(n.B, rightR)
 	sg := views.NewSplitGroup(bounds, n.Orientation, splitPos)
+	// fv-go v0.5.2 reports accepted mouse drags after synchronizing the
+	// SplitGroup's own SplitPos. Capture this exact model node so nested
+	// splitters persist independently across rerenders and session saves.
+	sg.OnRatioChanged = func(ratio float64) {
+		n.Ratio = ratio
+		// The fv-go panels move live during the drag; keep fvmux's logical
+		// hit-testing/navigation rectangles in sync without rebuilding the
+		// active view tree from inside the splitter's event loop.
+		updateLeafRects(n, n.RenderRect)
+	}
 	sg.SetPanels(p1, p2)
 	return sg
+}
+
+func updateLeafRects(n *PaneNode, bounds geom.Rect) {
+	if n == nil {
+		return
+	}
+	n.RenderRect = bounds
+	if n.Kind == NodeLeaf {
+		if n.Pane != nil {
+			n.Pane.LastRect = bounds
+		}
+		return
+	}
+	splitPos := splitPosFor(bounds, n.Orientation, n.Ratio)
+	a, b := childRects(bounds, n.Orientation, splitPos)
+	updateLeafRects(n.A, a)
+	updateLeafRects(n.B, b)
 }
 
 func splitPosFor(bounds geom.Rect, orient views.SplitOrientation, ratio float64) int {
@@ -72,8 +99,8 @@ func splitPosFor(bounds geom.Rect, orient views.SplitOrientation, ratio float64)
 	if orient == views.SplitHorizontal {
 		total = bounds.Height()
 	}
-	if total < 4 {
-		// Too small for the usual ≥2 margins. Keep both sides
+	if total < 2*minResizePaneCells+1 {
+		// Too small for both four-cell panes plus a divider. Keep both sides
 		// non-negative: left width = pos, right width = total-pos-1, so
 		// pos must stay in [0, total-1].
 		pos := total / 2
@@ -86,11 +113,11 @@ func splitPosFor(bounds geom.Rect, orient views.SplitOrientation, ratio float64)
 		return pos
 	}
 	pos := int(ratio * float64(total))
-	if pos < 2 {
-		pos = 2
+	if pos < minResizePaneCells {
+		pos = minResizePaneCells
 	}
-	if pos > total-2 {
-		pos = total - 2
+	if pos > total-minResizePaneCells-1 {
+		pos = total - minResizePaneCells - 1
 	}
 	return pos
 }

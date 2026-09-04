@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -100,11 +102,46 @@ func TestControlSocket_HashedNameIsSafeAndBounded(t *testing.T) {
 		t.Fatal("distinct aliases collided")
 	}
 
-	// Even a very long alias under a deep state root stays well under the
-	// ~104-byte unix socket path limit.
+	// Even a very long alias under an ordinary state root stays below the
+	// conservative Unix socket path limit.
 	long := strings.Repeat("very-long-alias-segment.", 20)
 	deep := Paths{StateRoot: "/home/somebody/.local/state/fvmux"}
-	if n := len(deep.ControlSocket(long)); n > 104 {
+	if n := len(deep.ControlSocket(long)); n > controlSocketPathLimit {
 		t.Fatalf("socket path too long: %d bytes", n)
+	}
+}
+
+func TestControlSocket_DeepStateRootUsesPrivateShortFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not use Unix-domain ControlMaster socket limits")
+	}
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	deepA := Paths{Root: rootA, StateRoot: filepath.Join(rootA, strings.Repeat("deep-segment", 12), "state-a")}
+	deepB := Paths{Root: rootB, StateRoot: filepath.Join(rootB, strings.Repeat("deep-segment", 12), "state-b")}
+
+	dirA := deepA.ControlSocketDir()
+	if filepath.Dir(dirA) != "/tmp" {
+		t.Fatalf("ControlSocketDir = %q, want a direct /tmp fallback", dirA)
+	}
+	if dirA == deepB.ControlSocketDir() {
+		t.Fatal("different state roots must not share a fallback socket directory")
+	}
+	if got := len(deepA.ControlSocket(strings.Repeat("alias", 100))); got > controlSocketPathLimit {
+		t.Fatalf("fallback socket path is %d bytes, limit is %d", got, controlSocketPathLimit)
+	}
+
+	// EnsureDirs must create the computed directory, not the unusably deep
+	// preferred one, and it must be private under the shared /tmp parent.
+	if err := deepA.EnsureDirs(); err != nil {
+		t.Fatalf("EnsureDirs: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(dirA) })
+	info, err := os.Stat(dirA)
+	if err != nil {
+		t.Fatalf("stat fallback dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("fallback mode = %#o, want 0700", got)
 	}
 }

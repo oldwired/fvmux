@@ -143,6 +143,62 @@ func TestAsyncRemoteOp_RefreshWGBalanced(t *testing.T) {
 	}
 }
 
+func TestAsyncRemoteOpKeySuppressesDuplicateUntilUICompletion(t *testing.T) {
+	scheduled := make(chan func(), 2)
+	views.SetCallSoon(func(fn func()) { scheduled <- fn })
+	defer views.SetCallSoon(nil)
+
+	var closed atomic.Bool
+	var wg sync.WaitGroup
+	p := &panel{isRemote: true, closed: &closed, refreshWG: &wg}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if !p.asyncRemoteOpKey("delete:/remote/item", func() error {
+		close(started)
+		<-release
+		return nil
+	}, nil) {
+		t.Fatal("first keyed operation was not started")
+	}
+	<-started
+
+	var duplicateRan atomic.Bool
+	if p.asyncRemoteOpKey("delete:/remote/item", func() error {
+		duplicateRan.Store(true)
+		return nil
+	}, nil) {
+		t.Fatal("duplicate keyed operation was accepted")
+	}
+	if duplicateRan.Load() {
+		t.Fatal("duplicate keyed operation ran")
+	}
+
+	close(release)
+	var deliver func()
+	select {
+	case deliver = <-scheduled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first keyed operation never scheduled completion")
+	}
+	wg.Wait()
+	// The key intentionally remains held until the UI has observed completion.
+	if p.asyncRemoteOpKey("delete:/remote/item", func() error { return nil }, nil) {
+		t.Fatal("key was released before its UI completion ran")
+	}
+	deliver()
+
+	if !p.asyncRemoteOpKey("delete:/remote/item", func() error { return nil }, nil) {
+		t.Fatal("key was not released after UI completion")
+	}
+	select {
+	case deliver = <-scheduled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow-up keyed operation never scheduled completion")
+	}
+	wg.Wait()
+	deliver()
+}
+
 // TestAsyncRemoteOp_EndToEndMkdirDelete drives a real mkdir + recursive
 // delete through the async helper against the in-process SFTP harness —
 // the same client calls the F7/F8 actions make. The inline CallSoon

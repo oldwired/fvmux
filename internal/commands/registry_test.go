@@ -18,6 +18,19 @@ func TestRegistryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLookupByNameAcceptsLegacyAlias(t *testing.T) {
+	r := Defaults()
+	if got := r.LookupByName("Split Horizontal"); got == nil || got.ID != CmdSplitH {
+		t.Fatalf("legacy split name resolved to %#v", got)
+	}
+	if got := r.LookupByName("Split Vertical"); got == nil || got.ID != CmdSplitV {
+		t.Fatalf("legacy split name resolved to %#v", got)
+	}
+	if got := r.LookupByName("Split Left/Right"); got == nil || got.ID != CmdSplitH {
+		t.Fatalf("current split name resolved to %#v", got)
+	}
+}
+
 func TestRegistryDuplicateIDPanics(t *testing.T) {
 	r := New()
 	r.Register(&Command{ID: 9001, Name: "a"})

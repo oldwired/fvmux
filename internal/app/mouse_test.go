@@ -23,7 +23,7 @@ func TestPaneContextMenuLabelsTrackRegistry(t *testing.T) {
 	reg := commands.Defaults()
 
 	items := paneContextMenuItems(reg)
-	if !hasItem(items, "Split Horizontal (C-g %)") {
+	if !hasItem(items, "Split Left/Right (C-g %)") {
 		t.Fatalf("baseline menu missing default split chord: %v", items)
 	}
 	if !hasItem(items, "Kill Pane (C-g x)") {
@@ -39,14 +39,22 @@ func TestPaneContextMenuLabelsTrackRegistry(t *testing.T) {
 
 	reg.RebindPrefix("C-g", "C-b")
 	items = paneContextMenuItems(reg)
-	if !hasItem(items, "Split Horizontal (C-b %)") {
+	if !hasItem(items, "Split Left/Right (C-b %)") {
 		t.Errorf("after rebind, split chord not updated: %v", items)
 	}
 	if !hasItem(items, "Kill Pane (C-b x)") {
 		t.Errorf("after rebind, kill chord not updated: %v", items)
 	}
-	if hasItem(items, "Split Horizontal (C-g %)") {
+	if hasItem(items, "Split Left/Right (C-g %)") {
 		t.Errorf("after rebind, stale C-g chord still shown: %v", items)
+	}
+	if len(paneContextRows) < 4 || paneContextRows[3] != commands.CmdRenamePane {
+		t.Fatalf("pane context rename row = %v, want CmdRenamePane", paneContextRows)
+	}
+	for _, id := range paneContextRows {
+		if id == commands.CmdRenameWindow {
+			t.Fatalf("pane context menu still contains CmdRenameWindow: %v", paneContextRows)
+		}
 	}
 }
 

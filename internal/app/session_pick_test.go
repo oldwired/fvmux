@@ -48,9 +48,9 @@ func TestNewSession_PersistsBeforeClosing(t *testing.T) {
 	m.Opts.Config = cfg
 	// The fresh starter window that newSession opens spawns a real PTY via
 	// NewWindow. Use "cat": with no input it blocks (never exits, emits no
-	// output), so the terminal's wait/read goroutines never fire the
-	// callbacks that wireTerminalCallbacks assigns unsynchronized — keeping
-	// the test clean under -race. The child dies when the test binary exits.
+	// output), so the terminal's wait/read goroutines never schedule callback
+	// work through the process-global CallSoon hook used by other tests. The
+	// child dies when the test binary exits.
 	m.Opts.Profiles = []*profile.Profile{{Name: "starter", Command: "cat"}}
 	m.Opts.SessionName = "work"
 

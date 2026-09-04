@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,67 @@ import (
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/taskprogress"
 )
+
+func TestStartRejectsConcurrentDestinationWriter(t *testing.T) {
+	c := newTestClient(t)
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "a")
+	srcB := filepath.Join(dir, "b")
+	if err := os.WriteFile(srcA, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(srcB, []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "destination")
+
+	m := NewManager("test")
+	m.SetParallel(1)
+	// Occupy the only payload slot so the first transfer remains Active
+	// while the duplicate request is made.
+	m.sem <- struct{}{}
+	released := false
+	defer func() {
+		if !released {
+			<-m.sem
+		}
+		m.CancelAll()
+		m.Wait()
+	}()
+
+	first, err := m.Start(c, Upload, srcA, dst)
+	if err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if _, err := m.Start(c, Upload, srcB, dst); !errors.Is(err, ErrDestinationBusy) {
+		t.Fatalf("duplicate Start error = %v, want ErrDestinationBusy", err)
+	}
+	if got := len(m.Snapshot()); got != 1 {
+		t.Fatalf("manager tracks %d transfers after duplicate, want 1", got)
+	}
+	if first.partPath == dst+partSuffix {
+		t.Fatalf("temporary path %q is not uniquely suffixed", first.partPath)
+	}
+
+	<-m.sem
+	released = true
+	m.Wait()
+	if first.Status() != StatusDone {
+		t.Fatalf("first transfer status = %d, err=%q", first.Status(), first.Error())
+	}
+}
+
+func TestUniquePartPathDoesNotShareWriters(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "file")
+	a, b := uniquePartPath(destination), uniquePartPath(destination)
+	if a == b {
+		t.Fatalf("uniquePartPath returned the same path twice: %q", a)
+	}
+	prefix := destination + partSuffix + "."
+	if !strings.HasPrefix(a, prefix) || !strings.HasPrefix(b, prefix) {
+		t.Fatalf("part paths %q and %q do not use prefix %q", a, b, prefix)
+	}
+}
 
 // newActiveTransfer constructs a Transfer in the same shape Start
 // would, but without touching pkgsftp.Client — sufficient for testing

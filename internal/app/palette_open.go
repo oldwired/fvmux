@@ -40,9 +40,10 @@ func (m *Mux) openPalette() {
 		},
 	}
 	palette.ShowWithOptions(m.App, m.Reg, &commands.Ctx{App: m.App}, palette.Options{
-		Pos:     pos,
-		MRU:     mru,
-		Persist: persist,
-		Special: specials,
+		Pos:        pos,
+		MRU:        mru,
+		Persist:    persist,
+		Special:    specials,
+		OnDisabled: m.showUnavailableCommand,
 	})
 }

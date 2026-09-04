@@ -81,7 +81,7 @@ func mkdirAction(a *fvapp.Application, p *panel) {
 		// Off the UI goroutine — a slow link must not freeze the
 		// multiplexer for the length of a remote round-trip.
 		path := joinRemote(p.cwd, name)
-		p.asyncRemoteOp(
+		if !p.asyncRemoteOpKey("mkdir:"+path,
 			func() error { return p.c.MkdirAll(path) },
 			func(err error) {
 				if err != nil {
@@ -90,7 +90,9 @@ func mkdirAction(a *fvapp.Application, p *panel) {
 					return
 				}
 				p.refresh()
-			})
+			}) {
+			showOperationInProgress(a, path)
+		}
 		return
 	}
 	if err := os.MkdirAll(filepath.Join(p.cwd, name), 0o755); err != nil {
@@ -151,7 +153,7 @@ func deleteAction(a *fvapp.Application, p *panel, listingFocused bool) {
 	// Remote recursive delete walks the tree server-round-trip by
 	// round-trip — run it off the UI goroutine so a slow or dropped
 	// link can't freeze every window until the TCP timeout.
-	p.asyncRemoteOp(
+	if !p.asyncRemoteOpKey("delete:"+e.Path,
 		func() error { return p.c.RemoveAll(e.Path) },
 		func(err error) {
 			p.refresh()
@@ -159,7 +161,14 @@ func deleteAction(a *fvapp.Application, p *panel, listingFocused bool) {
 				msgbox.Showf(&a.Desktop.Group, msgbox.Error,
 					"delete failed: %s", []any{err.Error()}, msgbox.OKOnly)
 			}
-		})
+		}) {
+		showOperationInProgress(a, e.Path)
+	}
+}
+
+func showOperationInProgress(a *fvapp.Application, path string) {
+	msgbox.Showf(&a.Desktop.Group, msgbox.Info,
+		"An operation for %s is already in progress.", []any{path}, msgbox.OKOnly)
 }
 
 // currentListingEntry returns the fileEntry under the listing's

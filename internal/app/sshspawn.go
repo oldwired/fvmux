@@ -79,7 +79,8 @@ func findHostByAlias(hosts []*sshmgr.Host, alias string) *sshmgr.Host {
 // be forgotten at a call site.
 func (m *Mux) instantiateProfile(prof *profile.Profile, bounds geom.Rect) (*session.Pane, error) {
 	pane, err := profile.Instantiate(prof, bounds,
-		m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell)
+		m.Opts.Config.Terminal.ScrollbackLines, m.Opts.Config.Terminal.Shell,
+		m.wireTerminalCallbacks)
 	if err != nil && prof != nil && prof.SSHAlias != "" && m.sshPool != nil {
 		m.sshPool.Release(prof.SSHAlias)
 	}

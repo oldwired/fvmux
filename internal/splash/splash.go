@@ -124,7 +124,7 @@ func showWelcome(a *fvapp.Application) welcomeChoice {
 		geom.NewRect(2, 2, w-2, h-4),
 		"  Useful chords (assuming Ctrl-G prefix):\n\n"+
 			"    c   new window\n"+
-			"    %   split horizontal\n"+
+			"    %   split left/right\n"+
 			"    P   command palette\n"+
 			"    ?   full cheatsheet\n"+
 			"    ,   rename window\n\n"+

@@ -8,6 +8,7 @@
 package sftp
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -50,6 +51,18 @@ func (m *Manager) StartTreeMove(c *pkgsftp.Client, dir Direction, localRoot, rem
 }
 
 func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteRoot string, removeSourceTree func() error) (int, error) {
+	destinationKey, destinationPath := transferDestination(dir, localRoot, remoteRoot)
+	treeKey := "tree\x00" + destinationKey
+	if !m.claimTreeDestination(treeKey) {
+		return 0, fmt.Errorf("%w: %s", ErrDestinationBusy, destinationPath)
+	}
+	claimHandedOff := false
+	defer func() {
+		if !claimHandedOff {
+			m.releaseTreeDestination(treeKey)
+		}
+	}()
+
 	var transfers []*Transfer
 	enqueue := func(d Direction, local, remote string) error {
 		t, err := m.enqueue(c, d, local, remote, nil)
@@ -97,24 +110,25 @@ func (m *Manager) startTree(c *pkgsftp.Client, dir Direction, localRoot, remoteR
 		})
 	}
 
-	// Schedule the source-tree deletion even when walkErr is non-nil or no
-	// files were enqueued: a partial/empty copy that we then can't verify
-	// must NOT delete the source, and finishMove enforces that by checking
-	// every transfer's terminal status (an empty set deletes immediately,
-	// which is correct for a fully-copied empty tree).
-	if removeSourceTree != nil && walkErr == nil {
-		m.wg.Add(1)
-		go m.finishMove(transfers, removeSourceTree)
+	// Keep the destination claimed until every file spawned by the tree walk
+	// has settled. A failed/partial walk must not delete a move source, while
+	// an empty successful tree move may delete immediately.
+	if walkErr != nil {
+		removeSourceTree = nil
 	}
+	m.wg.Add(1)
+	go m.finishTree(transfers, removeSourceTree, treeKey)
+	claimHandedOff = true
 	return len(transfers), walkErr
 }
 
-// finishMove waits for every transfer in a tree-move group to reach a
-// terminal state and deletes the source tree only if all of them
-// succeeded. Tracked by m.wg so the browser's teardown drain waits for
-// the deletion before closing the SFTP client.
-func (m *Manager) finishMove(transfers []*Transfer, removeSourceTree func() error) {
+// finishTree waits for every transfer in a tree group to reach a terminal
+// state, releases its root destination claim, and for a move deletes the
+// source only if every copy succeeded. It is tracked by m.wg so browser
+// teardown waits for both transfer completion and the optional deletion.
+func (m *Manager) finishTree(transfers []*Transfer, removeSourceTree func() error, treeKey string) {
 	defer m.wg.Done()
+	defer m.releaseTreeDestination(treeKey)
 	allDone := true
 	for _, t := range transfers {
 		<-t.done
@@ -122,7 +136,7 @@ func (m *Manager) finishMove(transfers []*Transfer, removeSourceTree func() erro
 			allDone = false
 		}
 	}
-	if allDone {
+	if allDone && removeSourceTree != nil {
 		_ = removeSourceTree() // best effort: the copy already succeeded.
 	}
 }

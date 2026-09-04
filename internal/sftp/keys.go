@@ -1,6 +1,7 @@
 package sftp
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -239,8 +240,7 @@ func (h *keyHandler) copyAcross() {
 			return err
 		}, func(err error) {
 			if err != nil {
-				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-					"Download failed: %s", []any{err.Error()}, msgbox.OKOnly)
+				h.reportTransferError("Download", err)
 			}
 		})
 		return
@@ -270,8 +270,7 @@ func (h *keyHandler) copyAcross() {
 			return err
 		}, func(err error) {
 			if err != nil {
-				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-					"Upload failed: %s", []any{err.Error()}, msgbox.OKOnly)
+				h.reportTransferError("Upload", err)
 			}
 		})
 	})
@@ -325,8 +324,7 @@ func (h *keyHandler) copyDir(c *pkgsftp.Client, dir Direction, srcRoot, dst stri
 			return err
 		}, func(err error) {
 			if err != nil {
-				msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-					"Copy folder failed: %s", []any{err.Error()}, msgbox.OKOnly)
+				h.reportTransferError("Copy folder", err)
 				return
 			}
 			if n == 0 && other != nil {
@@ -334,6 +332,15 @@ func (h *keyHandler) copyDir(c *pkgsftp.Client, dir Direction, srcRoot, dst stri
 			}
 		})
 	})
+}
+
+func (h *keyHandler) reportTransferError(action string, err error) {
+	kind := msgbox.Error
+	if errors.Is(err, ErrDestinationBusy) {
+		kind = msgbox.Info
+	}
+	msgbox.Showf(&h.app.Desktop.Group, kind,
+		"%s: %s", []any{action, err.Error()}, msgbox.OKOnly)
 }
 
 // confirmOverwrite asks before clobbering an existing destination,

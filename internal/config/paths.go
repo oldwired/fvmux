@@ -9,7 +9,8 @@
 //	~/.config/fvmux/sessions/<name>.toml  — saved sessions
 //	~/.config/fvmux/hosts.toml            — SSH host augmentations (step 9)
 //	~/.local/state/fvmux/state.toml       — managed first-run / mru state
-//	~/.local/state/fvmux/cm/<alias>.sock  — SSH control sockets (step 9)
+//	~/.local/state/fvmux/cm/<alias>.sock  — SSH control sockets (step 9;
+//	                                         deep roots use a short /tmp dir)
 package config
 
 import (
@@ -19,8 +20,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
+
+// controlSocketPathLimit is deliberately below the shortest common Unix
+// sockaddr_un.sun_path capacity (104 bytes on macOS, including its trailing
+// NUL). Keeping a few bytes in reserve avoids platform-specific off-by-one
+// behaviour in ssh and the Go net package.
+const controlSocketPathLimit = 100
 
 // Paths resolves every fvmux file location. Override Root to relocate
 // the whole tree (-config flag, tests' tmpdirs, etc.).
@@ -50,9 +58,10 @@ func Default() Paths {
 // WithRoot overrides the config root (used by -config and by tests).
 // The state root moves under it too: -config exists to isolate an
 // instance, and keeping state.toml (first-run flag, palette MRU) and
-// the ControlMaster socket dir at the global XDG location would leave
-// that isolation half-done — MRU writes interleaving between
-// instances, masters shared with the main one.
+// the ControlMaster socket identity at the global XDG location would leave
+// that isolation half-done — MRU writes interleaving between instances,
+// masters shared with the main one. Deep roots may use ControlSocketDir's
+// hashed /tmp fallback, whose hash still includes this relocated StateRoot.
 func (p Paths) WithRoot(root string) Paths {
 	if root == "" {
 		return p
@@ -67,11 +76,20 @@ func (p Paths) EnsureDirs() error {
 		p.SessionsDir(),
 		filepath.Join(p.Root, "themes"),
 		p.StateRoot,
-		filepath.Join(p.StateRoot, "cm"),
 	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
+	}
+	// Control sockets may live under a shared temporary parent when a deep
+	// -config root would exceed sockaddr_un's path limit. Keep the leaf private
+	// even if its parent is world-writable.
+	socketDir := p.ControlSocketDir()
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(socketDir, 0o700); err != nil {
+		return err
 	}
 	return nil
 }
@@ -113,15 +131,26 @@ func ValidSessionName(name string) error {
 	return nil
 }
 
-// ControlSocketDir is the directory holding SSH ControlMaster sockets.
-func (p Paths) ControlSocketDir() string { return filepath.Join(p.StateRoot, "cm") }
+// ControlSocketDir is the directory holding SSH ControlMaster sockets. The
+// normal location is StateRoot/cm. Unix-domain socket paths have a small
+// platform limit, though, so a deeply nested -config root uses a deterministic
+// private directory directly under /tmp instead. The StateRoot hash preserves
+// instance isolation without embedding the long root in the socket path.
+func (p Paths) ControlSocketDir() string {
+	preferred := filepath.Join(p.StateRoot, "cm")
+	if runtime.GOOS == "windows" || len(filepath.Join(preferred, strings.Repeat("x", 16)+".sock")) <= controlSocketPathLimit {
+		return preferred
+	}
+	home, _ := os.UserHomeDir()
+	sum := sha256.Sum256([]byte(home + "\x00" + filepath.Clean(p.StateRoot)))
+	return filepath.Join("/tmp", "fvmux-cm-"+hex.EncodeToString(sum[:8]))
+}
 
 // ControlSocket returns the ControlMaster socket path for alias. The
 // filename is a short hash of the alias rather than the alias itself, so
 // that (a) aliases containing path separators / "../" can't escape the
-// cm dir, and (b) the assembled path can never exceed the ~104-byte unix
-// socket-path limit (a long alias under a deep $XDG_STATE_HOME would
-// otherwise make ssh silently fall back to a non-multiplexed connection).
+// cm dir, and (b) together with ControlSocketDir's short-path fallback,
+// the assembled path stays below Unix socket-path limits.
 // The hash is deterministic, so the same alias always maps to the same
 // socket and masters are reused across connections and fvmux instances.
 func (p Paths) ControlSocket(alias string) string {

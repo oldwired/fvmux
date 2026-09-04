@@ -54,6 +54,12 @@ func (m *Mux) registerWindow(w *views.Window, ws *windowState) {
 	}
 	m.windows[w.Self()] = ws
 	m.windowOrder = append(m.windowOrder, w.Self())
+	// Window-frame close requests enter through fv-go before OnClose or
+	// detachment. Explicit fvmux kill commands already confirm and remove the
+	// frame directly, so they bypass this hook and cannot double-prompt.
+	w.OnCloseRequest = func() bool {
+		return !hasLivePanes(ws) || m.confirmKill("Kill window and all its panes?")
+	}
 	w.OnClose = func() { m.cleanupWindow(ws) }
 	// A mouse-drag resize stretches the body live through fv-go's GrowMode
 	// propagation, but it never rebuilds our tree — so Pane.LastRect (the
@@ -183,10 +189,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 	switch {
 	case ev.Buttons&consts.MbLeftButton != 0:
 		if leaf != ws.Focus && leaf.Pane != nil {
-			ws.Focus = leaf
-			focusTerminalPath(ws.Frame, leaf.Pane.Term)
-			m.refreshWindowTitle(ws)
-			m.refreshStatusBar()
+			m.setPaneFocus(ws, leaf)
 		}
 		if debug.Mouse() {
 			debug.Logf("mouse", "handleMouseDown: LEFT, falling through")
@@ -202,10 +205,7 @@ func (m *Mux) handleMouseDown(ev *mouseEvent) bool {
 		}
 		// Bring focus to the right-clicked pane before showing the menu.
 		if leaf != ws.Focus && leaf.Pane != nil {
-			ws.Focus = leaf
-			focusTerminalPath(ws.Frame, leaf.Pane.Term)
-			m.refreshWindowTitle(ws)
-			m.refreshStatusBar()
+			m.setPaneFocus(ws, leaf)
 		}
 		m.showPaneContextMenu(ev.Where)
 		return true
@@ -228,17 +228,19 @@ func findLeafAtPoint(ws *windowState, p geom.Point) *layout.PaneNode {
 	// LastRect is window-local (set inside Materialize against the
 	// window interior). Translate the global click to window-local.
 	local := geom.Point{X: p.X - frameOrigin.X, Y: p.Y - frameOrigin.Y}
+	if ws.Zoomed != nil {
+		// LastRect intentionally retains each pane's unzoomed geometry for
+		// directional navigation. A zoomed pane nevertheless owns the whole
+		// visible interior for mouse focus.
+		if visible := ws.Root.FindByID(*ws.Zoomed); visible != nil &&
+			windowInterior(ws.Frame).Contains(local) {
+			return visible
+		}
+		return nil
+	}
 	var hit *layout.PaneNode
 	ws.Root.Leaves(func(l *layout.PaneNode) {
 		if l.Pane == nil {
-			return
-		}
-		// In a zoomed window only the zoomed leaf's LastRect is
-		// refreshed by Materialize; the hidden panes keep stale rects
-		// covering the same area, so a last-match-wins walk could
-		// silently focus an invisible pane (and Ctrl-G x would then
-		// kill a process the user can't see).
-		if ws.Zoomed != nil && l.Pane.ID != *ws.Zoomed {
 			return
 		}
 		if l.Pane.LastRect.Contains(local) {
@@ -289,7 +291,7 @@ var paneContextRows = []uint16{
 	commands.CmdSplitH,
 	commands.CmdSplitV,
 	commands.CmdZoomPane,
-	commands.CmdRenameWindow,
+	commands.CmdRenamePane,
 	0,
 	commands.CmdSendSIGINT,
 	commands.CmdSendSIGQUIT,
@@ -318,6 +320,9 @@ func paneContextMenuItems(reg *commands.Registry) []string {
 		if c.Chord != "" {
 			label += " (" + c.Chord + ")"
 		}
+		if c.Enabled != nil && !c.Enabled(nil) {
+			label += " [disabled]"
+		}
 		items[i] = label
 	}
 	return items
@@ -333,15 +338,20 @@ func (m *Mux) showPaneContextMenu(origin geom.Point) {
 	if idx < 0 || idx >= len(paneContextRows) {
 		return
 	}
-	switch paneContextRows[idx] {
+	id := paneContextRows[idx]
+	if c := m.Reg.ByID(id); c != nil && c.Enabled != nil && !c.Enabled(nil) {
+		m.showUnavailableCommand(c)
+		return
+	}
+	switch id {
 	case commands.CmdSplitH:
 		m.doSplit(false)
 	case commands.CmdSplitV:
 		m.doSplit(true)
 	case commands.CmdZoomPane:
 		m.doZoom()
-	case commands.CmdRenameWindow:
-		m.renameWindow()
+	case commands.CmdRenamePane:
+		m.renamePane()
 	case commands.CmdSendSIGINT:
 		m.sendSIGINT()
 	case commands.CmdSendSIGQUIT:

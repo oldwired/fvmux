@@ -59,12 +59,7 @@ func (m *Mux) focusNextPaneInTree(direction int) {
 		idx = 0
 	}
 	next := leaves[(idx+direction+len(leaves))%len(leaves)]
-	ws.Focus = next
-	if next.Pane != nil {
-		focusTerminalPath(ws.Frame, next.Pane.Term)
-	}
-	m.refreshWindowTitle(ws)
-	m.refreshStatusBar()
+	m.setPaneFocus(ws, next)
 }
 
 // showWindowList opens a fuzzy-search picker over every window in

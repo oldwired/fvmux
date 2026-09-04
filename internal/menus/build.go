@@ -231,11 +231,52 @@ func item(reg *commands.Registry, id uint16) *fvmenus.Item {
 	if c == nil {
 		return nil
 	}
+	disabled := c.Enabled != nil && !c.Enabled(nil)
 	return &fvmenus.Item{
 		Name:     menuLabel(c),
 		Command:  c.ID,
+		Disabled: disabled,
 		Shortcut: c.Chord,
 	}
+}
+
+// RefreshAvailability re-evaluates registry predicates against an existing
+// menu tree. Menu items store Disabled as a value, so the app calls this on
+// state refreshes rather than rebuilding (and accidentally re-showing) a
+// hidden menu bar. Returns true when any row changed.
+func RefreshAvailability(bar *fvmenus.MenuBar, reg *commands.Registry) bool {
+	if bar == nil || bar.Menu == nil || reg == nil {
+		return false
+	}
+	changed := false
+	var walk func(*fvmenus.Menu)
+	walk = func(menu *fvmenus.Menu) {
+		if menu == nil {
+			return
+		}
+		for _, it := range menu.Items {
+			if it == nil {
+				continue
+			}
+			if it.Sub != nil {
+				walk(it.Sub)
+			}
+			if it.Command == 0 {
+				continue
+			}
+			c := reg.ByID(it.Command)
+			if c == nil {
+				continue // dynamic menu entries do not live in the registry.
+			}
+			disabled := c.Enabled != nil && !c.Enabled(nil)
+			if it.Disabled != disabled {
+				it.Disabled = disabled
+				changed = true
+			}
+		}
+	}
+	walk(bar.Menu)
+	return changed
 }
 
 func menuLabel(c *commands.Command) string {

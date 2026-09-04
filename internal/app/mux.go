@@ -97,7 +97,7 @@ func (m *Mux) refreshWindowTitle(ws *windowState) {
 	}
 	pt := ""
 	if ws.Focus != nil && ws.Focus.Pane != nil {
-		pt = ws.Focus.Pane.Title
+		pt = ws.Focus.Pane.DisplayTitle()
 	}
 	ws.Frame.SetTitle(composeTitle(ws.UserTitle, ws.ShellTitle, ws.Title, pt))
 }
@@ -141,6 +141,12 @@ type Mux struct {
 	// broadcastIfSync (terminal.HandleEvent). Production leaves it nil; tests
 	// inject a recorder to observe exactly which panes the sync gate reaches.
 	syncSend func(ev *drivers.Event, t *terminal.Terminal)
+	// pasteTo similarly lets command-target tests observe the selected terminal
+	// without depending on a process-global operating-system clipboard.
+	pasteTo func(*terminal.Terminal) error
+	// confirmKillPrompt isolates confirmation policy from modal UI in tests.
+	// Production leaves it nil and uses the fv-go message box.
+	confirmKillPrompt func(string) bool
 
 	layoutPreset layout.Preset
 
@@ -281,9 +287,7 @@ func (m *Mux) wireActions() {
 			}
 		}
 	})
-	bind(commands.CmdPaste, func() {
-		_ = copymode.Paste(m.FocusedTerminal())
-	})
+	bind(commands.CmdPaste, m.pasteClipboard)
 	bind(commands.CmdFindScrollback, func() {
 		// fv-go's terminal owns the search UI (input prompt in the
 		// status row, n/N jump, match highlighting). We just hand it
@@ -363,6 +367,7 @@ func (m *Mux) wireActions() {
 	bind(commands.CmdCascadeNoResize, m.cascadeNoResize)
 
 	m.wireTickerAction()
+	m.wireCommandAvailability()
 	m.wireTmuxAction()
 }
 
@@ -397,14 +402,16 @@ func (m *Mux) applyLayoutPreset(p layout.Preset) {
 		focusedID = ws.Focus.Pane.ID
 	}
 	ws.Root = layout.ApplyPreset(p, panes)
+	var next *layout.PaneNode
 	if found := ws.Root.FindByID(focusedID); found != nil {
-		ws.Focus = found
+		next = found
 	} else if leaves := ws.Root.CollectLeaves(); len(leaves) > 0 {
-		ws.Focus = leaves[0]
+		next = leaves[0]
 	}
 	if ws.Zoomed != nil && ws.Root.FindByID(*ws.Zoomed) == nil {
 		ws.Zoomed = nil
 	}
+	m.setPaneFocus(ws, next)
 	m.rerender(ws)
 }
 
@@ -523,9 +530,9 @@ func (m *Mux) connectHost() {
 	// in the pane rather than corrupting fvmux's display.
 	prof := m.sshProfile(h, h.Alias)
 	// connect_split decides how the connection lands: split the focused
-	// pane — "vertical" stacks the new pane below (like Split Vertical,
-	// C-g "), "horizontal" places it beside (like Split Horizontal,
-	// C-g %) — or open a floating window ("window", also the fallback
+	// pane — legacy value "vertical" stacks the new pane below (like Split
+	// Top/Bottom, C-g "), while "horizontal" places it beside (like Split
+	// Left/Right, C-g %) — or open a floating window ("window", also the fallback
 	// when there's no focused pane to divide).
 	switch m.Opts.Config.General.ConnectSplit {
 	case "vertical", "horizontal":
@@ -555,7 +562,7 @@ func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error
 	num := m.nextWindowNumber()
 	w := views.NewWindow(bounds, title, num)
 	interior := windowInterior(w)
-	root, err := m.buildWindowRoot(prof, interior, w)
+	root, err := m.buildWindowRoot(prof, interior)
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +576,7 @@ func (m *Mux) openWindowFromProfile(prof *profile.Profile) (*views.Window, error
 // against profiles.toml, falling back to the default shell). A layout
 // that fails to parse degrades to a single pane with a warning rather
 // than blocking the window.
-func (m *Mux) buildWindowRoot(prof *profile.Profile, interior geom.Rect, w *views.Window) (*layout.PaneNode, error) {
+func (m *Mux) buildWindowRoot(prof *profile.Profile, interior geom.Rect) (*layout.PaneNode, error) {
 	if prof.Layout != "" {
 		var spawned []*session.Pane
 		spawn := func(spec layout.LeafSpec) (*session.Pane, error) {
@@ -583,9 +590,8 @@ func (m *Mux) buildWindowRoot(prof *profile.Profile, interior geom.Rect, w *view
 			}
 			spawned = append(spawned, pane)
 			if spec.Title != "" {
-				pane.Title = spec.Title
+				pane.UserTitle = spec.Title
 			}
-			m.wireTerminalCallbacks(pane, w)
 			return pane, nil
 		}
 		root, err := layout.Unmarshal(prof.Layout, spawn)
@@ -609,7 +615,6 @@ func (m *Mux) buildWindowRoot(prof *profile.Profile, interior geom.Rect, w *view
 	if err != nil {
 		return nil, err
 	}
-	m.wireTerminalCallbacks(pane, w)
 	return layout.Leaf(pane), nil
 }
 
@@ -624,12 +629,11 @@ func (m *Mux) finishWindow(w *views.Window, num int, title string, root *layout.
 		Title:  title,
 		Frame:  w,
 		Root:   root,
-		Focus:  root.CollectLeaves()[0],
 	}
 	w.Insert(layout.Materialize(root, interior, nil))
 	m.registerWindow(w, state)
+	m.setPaneFocus(state, root.CollectLeaves()[0])
 	m.fridayShipIt()
-	m.refreshStatusBar()
 	return state
 }
 
@@ -707,6 +711,8 @@ func (m *Mux) NewWindow(profileName string) (*views.Window, error) {
 const (
 	flashPrioNumbers = 1 // Ctrl-G q window-number overlay.
 	flashPrioShipIt  = 2 // Friday "ship it" whimsy — protected from the overlay.
+	flashPrioResize  = 3 // operational feedback must remain visible over whimsy.
+	flashPrioCommand = 3 // unavailable/unknown command feedback is operational too.
 )
 
 // setFlash writes the shared status-bar flash slot. It refuses to
@@ -731,12 +737,12 @@ func (m *Mux) fridayShipIt() {
 	m.setFlash("ship it", 4*time.Second, flashPrioShipIt)
 }
 
-func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
+func (m *Mux) wireTerminalCallbacks(pane *session.Pane) {
 	t := pane.Term
-	// Install the rot13 output filter once, before the terminal starts —
-	// it's a no-op until the :rot13 egg flips pane.Rot13. Toggling an
-	// atomic is race-free with the read loop; swapping OnFeed on a live
-	// terminal would not be (there's no thread-safe setter upstream).
+	// profile.Instantiate invokes this as a pre-start configure hook. Every
+	// callback is therefore installed before the reader/wait goroutines can
+	// observe it; callbacks are never reassigned when a pane changes windows.
+	// The dynamic pane lookup below follows joins and break-outs instead.
 	t.OnFeed = func(in []byte) []byte {
 		if pane.Rot13.Load() {
 			return whimsy.Rot13(in)
@@ -747,10 +753,10 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 		if s == "" {
 			return
 		}
-		pane.Title = s
+		pane.ShellTitle = s
 		// Only the focused pane's shell title participates in the
 		// window caption; the user-set name (if any) brackets it.
-		ws := m.windows[w.Self()]
+		ws := m.windowContainingPane(pane)
 		if ws == nil || ws.Focus == nil || ws.Focus.Pane != pane {
 			return
 		}
@@ -763,6 +769,10 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 	t.OnExit = func(err error) {
 		pane.Dead = true
 		pane.ExitErr = err
+		if m.copyMode.Active() && m.copyMode.Term() == pane.Term {
+			m.copyMode.Close()
+		}
+		m.refreshStatusBar()
 		if pane.CloseOnExit {
 			// fv-go marshals terminal callbacks onto the UI goroutine, so
 			// close directly. Bouncing through a posted command only
@@ -771,6 +781,26 @@ func (m *Mux) wireTerminalCallbacks(pane *session.Pane, w *views.Window) {
 			m.AutoClosePane(pane)
 		}
 	}
+}
+
+// windowContainingPane resolves a pane's current owner at callback-delivery
+// time. Panes can move through Join and Break Out, so capturing a frame when
+// callbacks are installed would require unsafe callback reassignment later.
+func (m *Mux) windowContainingPane(pane *session.Pane) *windowState {
+	if pane == nil {
+		return nil
+	}
+	for _, key := range m.windowOrder {
+		ws := m.windows[key]
+		if ws == nil || ws.Root == nil {
+			continue
+		}
+		leaf := ws.Root.FindByID(pane.ID)
+		if leaf != nil && leaf.Pane == pane {
+			return ws
+		}
+	}
+	return nil
 }
 
 // AutoClosePane finds the window containing pane and tears it down —
@@ -788,6 +818,10 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 		if leaf == nil {
 			continue
 		}
+		var preferred *layout.PaneNode
+		if ws.Focus == leaf {
+			preferred = layout.RemovalSuccessor(leaf)
+		}
 		m.stopPane(leaf.Pane)
 		var removed bool
 		ws.Root, removed = layout.Close(ws.Root, leaf)
@@ -795,13 +829,10 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 			m.removeWindow(ws)
 			return
 		}
-		if ws.Focus == leaf {
-			ws.Focus = nil // force recoverFocus to pick a fresh leaf
-		}
-		recoverFocus(ws)
 		if ws.Zoomed != nil && ws.Root.FindByID(*ws.Zoomed) == nil {
 			ws.Zoomed = nil
 		}
+		m.setPaneFocus(ws, recoverFocus(ws, preferred))
 		m.rerender(ws)
 		return
 	}
@@ -811,10 +842,11 @@ func (m *Mux) AutoClosePane(pane *session.Pane) {
 // window's focused pane.
 func (m *Mux) FocusedTerminal() *terminal.Terminal {
 	ws := m.currentWindow()
-	if ws == nil || ws.Focus == nil || ws.Focus.Pane == nil {
+	leaf := focusedPane(ws)
+	if leaf == nil || leaf.Pane == nil {
 		return nil
 	}
-	return ws.Focus.Pane.Term
+	return leaf.Pane.Term
 }
 
 // LiteralForward writes b directly to the focused terminal's PTY.
@@ -835,6 +867,11 @@ func (m *Mux) InstallPrefixListener() {
 	spec := prefix.Lookup(m.Opts.Config.General.PrefixKey)
 	m.prefix = prefix.New(m.Reg, &commands.Ctx{App: m.App}, spec)
 	m.prefix.OnTriplePress = func() { m.RunFirstRunWizard() }
+	m.prefix.OnUnknown = func(chord string) {
+		m.setFlash("Unknown command: "+chord, 1800*time.Millisecond, flashPrioCommand)
+		m.refreshStatusBar()
+	}
+	m.prefix.OnUnavailable = m.showUnavailableCommand
 	m.App.Desktop.Insert(m.prefix)
 	m.installSyncListener()
 	m.installMouseListener()
@@ -981,7 +1018,27 @@ func (m *Mux) doSplit(vertical bool) {
 	if prof == nil {
 		prof = profile.Defaults()[0]
 	}
-	m.doSplitWith(prof, vertical)
+	m.doSplitWith(m.effectiveSplitProfile(prof), vertical)
+}
+
+// effectiveSplitProfile returns the per-spawn profile for a normal split.
+// A local focused pane may donate its OSC-7 cwd, but the configured profile
+// remains immutable and an SSH pane's remote path is never handed to a local
+// process. Ad-hoc connect_split profiles bypass this helper entirely.
+func (m *Mux) effectiveSplitProfile(prof *profile.Profile) *profile.Profile {
+	if prof == nil {
+		return nil
+	}
+	effective := *prof
+	if m.Opts.Config == nil || !m.Opts.Config.General.InheritSplitCWD {
+		return &effective
+	}
+	leaf := focusedPane(m.currentWindow())
+	if leaf == nil || leaf.Pane == nil || leaf.Pane.SSHAlias != "" || leaf.Pane.CWD == "" {
+		return &effective
+	}
+	effective.CWD = leaf.Pane.CWD
+	return &effective
 }
 
 // doSplitWith divides the focused pane, spawning the new sibling from
@@ -1000,26 +1057,29 @@ func (m *Mux) doSplitWith(prof *profile.Profile, vertical bool) {
 			msgbox.OKOnly)
 		return
 	}
-	m.wireTerminalCallbacks(newPane, ws.Frame)
 	if vertical {
 		ws.Root = layout.SplitV(ws.Root, ws.Focus, newPane)
 	} else {
 		ws.Root = layout.SplitH(ws.Root, ws.Focus, newPane)
 	}
-	ws.Focus = ws.Root.FindByID(newPane.ID)
+	// A structural split exits zoom mode so both the old pane and the new,
+	// focused sibling are immediately visible.
+	ws.Zoomed = nil
+	m.setPaneFocus(ws, ws.Root.FindByID(newPane.ID))
 	m.rerender(ws)
 }
 
 func (m *Mux) doClose() {
 	ws := m.currentWindow()
-	if ws == nil || ws.Focus == nil {
+	target := focusedPane(ws)
+	if target == nil {
 		return
 	}
-	target := ws.Focus
 	if paneIsAlive(target.Pane) && !m.confirmKill(
 		"Close pane and kill its process?") {
 		return
 	}
+	preferred := layout.RemovalSuccessor(target)
 
 	m.stopPane(target.Pane)
 
@@ -1029,22 +1089,23 @@ func (m *Mux) doClose() {
 		m.removeWindow(ws)
 		return
 	}
-	recoverFocus(ws)
 	if ws.Zoomed != nil && ws.Root.FindByID(*ws.Zoomed) == nil {
 		ws.Zoomed = nil
 	}
+	m.setPaneFocus(ws, recoverFocus(ws, preferred))
 	m.rerender(ws)
 }
 
 func (m *Mux) doZoom() {
 	ws := m.currentWindow()
-	if ws == nil || ws.Focus == nil {
+	focus := focusedPane(ws)
+	if focus == nil {
 		return
 	}
 	if ws.Zoomed != nil {
 		ws.Zoomed = nil
 	} else {
-		id := ws.Focus.Pane.ID
+		id := focus.Pane.ID
 		ws.Zoomed = &id
 	}
 	m.rerender(ws)
@@ -1056,12 +1117,7 @@ func (m *Mux) doFocusDir(dir layout.Direction) {
 		return
 	}
 	if next := layout.FocusDir(ws.Root, ws.Focus, dir); next != nil {
-		ws.Focus = next
-		if next.Pane != nil {
-			focusTerminalPath(ws.Frame, next.Pane.Term)
-		}
-		m.refreshWindowTitle(ws)
-		m.refreshStatusBar()
+		m.setPaneFocus(ws, next)
 	}
 }
 
@@ -1084,7 +1140,7 @@ func (m *Mux) doSwap(direction int) {
 	target := (idx + direction + len(leaves)) % len(leaves)
 	layout.Swap(ws.Focus, leaves[target])
 	// Focus follows the moved pane (it now lives at target's old slot).
-	ws.Focus = leaves[target]
+	m.setPaneFocus(ws, leaves[target])
 	m.rerender(ws)
 }
 
@@ -1096,15 +1152,15 @@ func (m *Mux) doBreakOut() {
 	if len(ws.Root.CollectLeaves()) < 2 {
 		return
 	}
+	preferred := layout.RemovalSuccessor(ws.Focus)
 	newSrcRoot, newWinRoot := layout.BreakOut(ws.Root, ws.Focus)
 	ws.Root = newSrcRoot
-	// The moved leaf is no longer in ws.Root; recoverFocus picks the
-	// first surviving leaf (or sets Focus = nil if the source is empty,
-	// which the guard above prevents but rerender tolerates).
-	recoverFocus(ws)
+	// The moved leaf is no longer in ws.Root; recoverFocus chooses a live
+	// candidate, which the canonical focus transition applies below.
 	if ws.Zoomed != nil && (ws.Root == nil || ws.Root.FindByID(*ws.Zoomed) == nil) {
 		ws.Zoomed = nil
 	}
+	m.setPaneFocus(ws, recoverFocus(ws, preferred))
 	m.rerender(ws)
 
 	// Open a new window with the detached pane as its only leaf, via
@@ -1112,10 +1168,10 @@ func (m *Mux) doBreakOut() {
 	// fridayShipIt/refreshStatusBar).
 	bounds := m.cascadedBounds()
 	num := m.nextWindowNumber()
-	w := views.NewWindow(bounds, newWinRoot.Pane.Title, num)
+	title := newWinRoot.Pane.DisplayTitle()
+	w := views.NewWindow(bounds, title, num)
 	interior := windowInterior(w)
-	m.wireTerminalCallbacks(newWinRoot.Pane, w)
-	m.finishWindow(w, num, newWinRoot.Pane.Title, newWinRoot, interior)
+	m.finishWindow(w, num, title, newWinRoot, interior)
 }
 
 func (m *Mux) cycleWindow(direction int) {
@@ -1210,6 +1266,9 @@ func (m *Mux) CanQuit() bool {
 func (m *Mux) confirmKill(message string) bool {
 	if m.Opts.Config == nil || !m.Opts.Config.General.ConfirmKill {
 		return true
+	}
+	if m.confirmKillPrompt != nil {
+		return m.confirmKillPrompt(message)
 	}
 	return msgbox.Show(&m.App.Desktop.Group, msgbox.Info, message,
 		msgbox.YesNo) == consts.CmYes
@@ -1306,24 +1365,28 @@ func (m *Mux) cleanupWindow(ws *windowState) {
 	m.refreshStatusBar()
 }
 
-// recoverFocus ensures ws.Focus points to a leaf that still lives in
-// ws.Root. Called after Close / BreakOut / AutoClose to fix up focus
-// when the previously focused leaf was removed from the tree.
-func recoverFocus(ws *windowState) {
+// recoverFocus returns a live focus candidate after Close / BreakOut /
+// AutoClose. The caller applies it through setPaneFocus so every focus
+// transition performs the same validation and UI refreshes.
+func recoverFocus(ws *windowState, preferred ...*layout.PaneNode) *layout.PaneNode {
 	if ws == nil || ws.Root == nil {
-		ws.Focus = nil
-		return
+		return nil
+	}
+	for _, candidate := range preferred {
+		if candidate != nil && candidate.Pane != nil &&
+			ws.Root.FindByID(candidate.Pane.ID) == candidate {
+			return candidate
+		}
 	}
 	if ws.Focus != nil && ws.Focus.Pane != nil &&
-		ws.Root.FindByID(ws.Focus.Pane.ID) != nil {
-		return
+		ws.Root.FindByID(ws.Focus.Pane.ID) == ws.Focus {
+		return ws.Focus
 	}
 	leaves := ws.Root.CollectLeaves()
 	if len(leaves) == 0 {
-		ws.Focus = nil
-		return
+		return nil
 	}
-	ws.Focus = leaves[0]
+	return leaves[0]
 }
 
 // rerender rebuilds the fv-go view tree under ws.Frame to match the
@@ -1349,6 +1412,7 @@ func (m *Mux) rerender(ws *windowState) {
 	if ws.Focus != nil && ws.Focus.Pane != nil {
 		focusTerminalPath(ws.Frame, ws.Focus.Pane.Term)
 	}
+	m.refreshWindowTitle(ws)
 	m.refreshStatusBar()
 }
 
@@ -1439,10 +1503,6 @@ func (m *Mux) cascadedBounds() geom.Rect {
 // Bounds are clamped to fit the desktop.
 func (m *Mux) cascadedBoundsFor(reqW, reqH int) geom.Rect {
 	db := m.App.Desktop.BaseView()
-	n := len(m.windowOrder)
-	x := 2 + n*3
-	y := 1 + n*2
-
 	w, h := 80, 24
 	if a := m.Opts.Config.Appearance; a.DefaultWindowWidth > 0 {
 		w = a.DefaultWindowWidth
@@ -1456,18 +1516,45 @@ func (m *Mux) cascadedBoundsFor(reqW, reqH int) geom.Rect {
 	if reqH > 0 {
 		h = reqH
 	}
+	return cascadedRect(db.Size, len(m.windowOrder), w, h)
+}
 
-	if db.Size.X > 0 && x+w > db.Size.X-1 {
-		w = db.Size.X - x - 1
+// cascadedRect fits one requested window wholly inside a desktop-local
+// rectangle. The offset wraps independently on each axis; size is chosen
+// before position so late windows never shrink and then get forced back past
+// the edge by a nominal minimum. Tiny desktops simply use all available cells.
+func cascadedRect(size geom.Point, n, requestedW, requestedH int) geom.Rect {
+	if size.X <= 0 || size.Y <= 0 {
+		return geom.NewRect(0, 0, 0, 0)
 	}
-	if db.Size.Y > 0 && y+h > db.Size.Y-1 {
-		h = db.Size.Y - y - 1
+	w, h := requestedW, requestedH
+	if w < 1 {
+		w = 1
 	}
-	if w < 20 {
-		w = 20
+	if h < 1 {
+		h = 1
 	}
-	if h < 8 {
-		h = 8
+	if w > size.X {
+		w = size.X
+	}
+	if h > size.Y {
+		h = size.Y
+	}
+
+	maxX, maxY := size.X-w, size.Y-h
+	baseX, baseY := 2, 1
+	if baseX > maxX {
+		baseX = maxX
+	}
+	if baseY > maxY {
+		baseY = maxY
+	}
+	x, y := baseX, baseY
+	if span := maxX - baseX + 1; span > 1 {
+		x += (n * 3) % span
+	}
+	if span := maxY - baseY + 1; span > 1 {
+		y += (n * 2) % span
 	}
 	return geom.NewRect(x, y, x+w, y+h)
 }

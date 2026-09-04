@@ -62,7 +62,7 @@ func (m *Mux) joinFrom() {
 
 	// Pick orientation via popupmenu.
 	orient := popupmenu.New(geom.Point{X: x, Y: y},
-		[]string{"Split horizontal (side-by-side)", "Split vertical (stacked)"}, 36).
+		[]string{"Place left/right", "Place top/bottom"}, 36).
 		Run(&m.App.Desktop.Group)
 	if orient < 0 {
 		return
@@ -79,16 +79,8 @@ func (m *Mux) joinFrom() {
 		return
 	}
 	dst.Root = newRoot
-	// Re-wire terminal callbacks for every pane now living under the
-	// destination window: the moved panes' OnTitle/OnExit closures
-	// captured the SOURCE window, which is about to be deleted — their
-	// title updates would resolve a nil windowState forever after.
-	// (Re-wiring the destination's own panes is an idempotent refresh.)
-	dst.Root.Leaves(func(l *layout.PaneNode) {
-		if l.Pane != nil {
-			m.wireTerminalCallbacks(l.Pane, dst.Frame)
-		}
-	})
+	// Terminal callbacks resolve their owning window when they run, so the
+	// moved pane follows this join without unsafe callback reassignment.
 	// Source window is now empty; close it (cleanup stops the moved
 	// pane's terminal? — NO. The pane moved by JoinFrom is the same
 	// *session.Pane reference; we must NOT call Stop on it. Drop the

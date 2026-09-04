@@ -141,7 +141,9 @@ Stage 1 fvmux work proceeds per the **Implementation order** section near the bo
 type Pane struct {
     ID       PaneID
     Term     *terminal.Terminal
-    Title    string             // last OSC-set title; falls back to Profile.Name
+    Title    string             // profile-derived fallback title
+    ShellTitle string           // latest OSC-set title
+    UserTitle  string           // optional sticky pane rename
     CWD      string             // updated from OSC7 when seen
     Profile  string             // empty for ad-hoc
     Dead     bool
@@ -273,12 +275,14 @@ Every fvmux action is registered in one `internal/commands.Registry`. The regist
 type Command struct {
     ID         uint16            // fv-go OnCommand dispatch ID (≥ 1000)
     Category   string            // "Pane", "Window", "Edit", "View", … (mirrors menu names)
-    Name       string            // "Split Horizontal" (clean, palette-friendly)
-    MenuLabel  string            // "Split ~H~orizontal" (with Borland-style hotkey markers)
+    Name       string            // "Split Left/Right" (clean, palette-friendly)
+    Aliases    []string          // legacy keybindings.toml command names
+    MenuLabel  string            // "Split Left/Ri~g~ht" (with Borland-style hotkey markers)
     Chord      string            // "C-g %"  ("" for unbound)
     Hidden     bool              // omit from menus + palette but keep ID stable (e.g. send-literal-prefix)
     Action     func(ctx *Ctx)    // direct invocation path (palette + chord call this)
     Enabled    func(ctx *Ctx) bool   // nil ⇒ always enabled
+    DisabledReason string        // concise status feedback when unavailable
 }
 
 type Registry struct {
@@ -435,7 +439,7 @@ Fuzzy-searchable list over every command in the registry — fvmux's answer to V
 1. Press `Ctrl-G P`. fvmux opens a centred modal: an `InputLine` on top and a scrollable result list below. (Built from `widgets/fuzzyfinder`, which already provides the score-by-character-subsequence behaviour; we wrap it to render two-column rows.)
 2. Each row renders as:
    ```
-   Pane    Split Horizontal              Ctrl-G %
+   Pane    Split Left/Right              Ctrl-G %
    Pane    Focus Left                    Ctrl-G h
    File    Open Session…                 Ctrl-G s
    View    Theme: Tokyonight-ish
@@ -504,7 +508,7 @@ While the prefix is armed, `prefix/overlay.go` paints inverse-video `── PREF
 3. `widgets/fuzzyfinder.New(bounds, aliases).Run(desktop)` runs modally. Items render `alias  user@host:port  [tags]` with right-aligned source badge.
 4. On selection, `InputLine` dialog ("Connect command override?") pre-fills `ssh <alias>`. `Esc` cancels.
 5. `sshmgr.pool.Acquire(alias)` returns a `ControlPath` (`~/.local/state/fvmux/cm/<alias>.sock`). If no master process exists, fvmux spawns a hidden `ssh -M -N -o ControlPersist=600 <alias>`.
-6. `session.lifecycle.SpawnInFocusedWindow(profile.AdHoc{Command:"ssh", Args:["-S",ctlPath,"-o","ControlMaster=auto",alias]})` inserts a new `Pane`. Becomes a vertical split of focused pane by default (`[general] connect_split` overrides).
+6. `session.lifecycle.SpawnInFocusedWindow(profile.AdHoc{Command:"ssh", Args:["-S",ctlPath,"-o","ControlMaster=auto",alias]})` inserts a new `Pane`. By default it is placed below the focused pane (`[general] connect_split` overrides; its legacy `vertical` value means top/bottom and `horizontal` means left/right).
 7. Pane `Title` defaults to alias; `OnTitle` overrides as remote shell emits OSC.
 8. On pane exit, `pool.Release(alias)` decrements refcount; master stays alive until `ControlPersist` expires.
 
@@ -533,7 +537,7 @@ The same alias used twice (once in Ctrl-G H, once in SFTP browser) reuses the ma
 - **Splitter drag** → `views.SplitGroup` handles its own drag; fvmux's render walks the tree and updates `Ratio` after a splitter ends.
 - **Click pane to focus** → fvmux's pre-process view inspects mouse-down whose target leaf differs from current focus; updates `session.focus`. Terminal's own SGR-1006 forwarding (when inner app enabled `1006`/`1000`) is unchanged.
 - **Right-click pane** → `widgets/popupmenu.New(origin, items, 24).Run(desktop)`. Items by pane state:
-  - Always: *Split horizontal*, *Split vertical*, *Zoom/Unzoom*, *Rename window*.
+  - Always: *Split left/right*, *Split top/bottom*, *Zoom/Unzoom*, *Rename pane*.
   - If alive: *Send SIGINT*, *Send SIGTERM*, *Send EOF*.
   - If dead: *Respawn*, *Remove*.
   - If SSH (Profile prefix matches): *Open SFTP here*, *Copy alias*.

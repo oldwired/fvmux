@@ -37,10 +37,16 @@ func NewWindowID() WindowID { return WindowID(nextWindowID.Add(1)) }
 // Activity / Bell are updated by the Mux from the terminal's OnActivity
 // / OnBell callbacks; consumers read them but don't write.
 type Pane struct {
-	ID      PaneID
-	Term    *terminal.Terminal
-	Title   string
-	Profile string // empty for ad-hoc spawns
+	ID   PaneID
+	Term *terminal.Terminal
+
+	// Pane title ownership is explicit: Title is the profile-derived fallback,
+	// ShellTitle is the latest OSC 0/1/2 value, and UserTitle is a sticky
+	// rename. DisplayTitle applies their precedence for UI surfaces.
+	Title      string
+	ShellTitle string
+	UserTitle  string
+	Profile    string // empty for ad-hoc spawns
 
 	// SSHAlias, when non-empty, records that this pane holds one SSH
 	// pool refcount for the alias (interactive ssh spawned through the
@@ -75,6 +81,20 @@ type Pane struct {
 	// recent OnBell — IsBellActive() flags one in the past 4 seconds.
 	Activity time.Time
 	BellAt   time.Time
+}
+
+// DisplayTitle returns the pane caption users should see.
+func (p *Pane) DisplayTitle() string {
+	if p == nil {
+		return ""
+	}
+	if p.UserTitle != "" {
+		return p.UserTitle
+	}
+	if p.ShellTitle != "" {
+		return p.ShellTitle
+	}
+	return p.Title
 }
 
 // IsActivityRecent reports whether activity arrived within the

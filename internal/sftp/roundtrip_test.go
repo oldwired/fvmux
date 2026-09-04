@@ -38,9 +38,9 @@ func TestStart_UploadRoundTrip(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("uploaded bytes differ from source")
 	}
-	// The .part temp must not survive a successful transfer.
-	if _, err := os.Stat(dst + partSuffix); !os.IsNotExist(err) {
-		t.Fatalf("leftover part file: err=%v", err)
+	// No uniquely named .part temp may survive a successful transfer.
+	if leftovers, err := filepath.Glob(dst + partSuffix + ".*"); err != nil || len(leftovers) != 0 {
+		t.Fatalf("leftover part files = %v (glob err=%v)", leftovers, err)
 	}
 }
 
@@ -70,6 +70,9 @@ func TestStart_DownloadRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatal("downloaded bytes differ from source")
+	}
+	if leftovers, err := filepath.Glob(dst + partSuffix + ".*"); err != nil || len(leftovers) != 0 {
+		t.Fatalf("leftover part files = %v (glob err=%v)", leftovers, err)
 	}
 }
 

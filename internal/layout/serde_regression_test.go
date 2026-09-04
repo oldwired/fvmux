@@ -63,7 +63,7 @@ func TestMarshalQuotesDelimiterProfiles(t *testing.T) {
 		var got LeafSpec
 		spawn := func(spec LeafSpec) (*session.Pane, error) {
 			got = spec
-			return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
+			return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, UserTitle: spec.Title}, nil
 		}
 		p := &session.Pane{ID: session.NewPaneID(), Profile: profile}
 		s := Marshal(Leaf(p))
@@ -99,7 +99,7 @@ func TestMarshalUnmarshalRoundTripProperty(t *testing.T) {
 		var wantProfiles, wantTitles []string
 		for _, l := range tree.CollectLeaves() {
 			wantProfiles = append(wantProfiles, l.Pane.Profile)
-			wantTitles = append(wantTitles, l.Pane.Title)
+			wantTitles = append(wantTitles, l.Pane.UserTitle)
 		}
 
 		s1 := Marshal(tree)
@@ -107,7 +107,7 @@ func TestMarshalUnmarshalRoundTripProperty(t *testing.T) {
 		var specs []LeafSpec
 		spawn := func(spec LeafSpec) (*session.Pane, error) {
 			specs = append(specs, spec)
-			return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
+			return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, UserTitle: spec.Title}, nil
 		}
 		back, err := Unmarshal(s1, spawn)
 		if err != nil {
@@ -139,9 +139,9 @@ func TestMarshalUnmarshalRoundTripProperty(t *testing.T) {
 func randTree(rng *rand.Rand, maxDepth int) *PaneNode {
 	if maxDepth <= 0 || rng.Intn(3) == 0 {
 		p := &session.Pane{
-			ID:      session.NewPaneID(),
-			Profile: randToken(rng, 1, 8), // never empty
-			Title:   randToken(rng, 0, 8), // may be empty
+			ID:        session.NewPaneID(),
+			Profile:   randToken(rng, 1, 8), // never empty
+			UserTitle: randToken(rng, 0, 8), // may be empty
 		}
 		return Leaf(p)
 	}

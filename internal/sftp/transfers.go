@@ -5,10 +5,14 @@
 package sftp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -19,11 +23,18 @@ import (
 	pkgsftp "github.com/pkg/sftp"
 )
 
-// partSuffix names the temporary file a transfer writes into; on success
-// it is renamed over the real destination, so a failed/cancelled transfer
-// never leaves a truncated file masquerading as a complete one, and an
-// existing destination is only replaced once the copy fully succeeds.
+// partSuffix prefixes the unique temporary file each transfer writes into;
+// on success it is renamed over the real destination. Per-transfer names
+// keep separate fvmux instances and browser windows from sharing a partial
+// file when they happen to target the same destination concurrently.
 const partSuffix = ".part-fvmux"
+
+// ErrDestinationBusy reports that this Manager already has a transfer
+// writing the same local or remote destination. Callers may treat it as
+// harmless repeated input rather than presenting it as a transport failure.
+var ErrDestinationBusy = errors.New("transfer destination is already in progress")
+
+var fallbackPartID atomic.Uint64
 
 // Direction is the transfer direction.
 type Direction uint8
@@ -51,7 +62,7 @@ type Transfer struct {
 	cancelOnce sync.Once
 
 	// done is closed by run after status reaches a terminal value. A
-	// move's group waiter (finishMove) blocks on it to learn when the
+	// move's group waiter (finishTree) blocks on it to learn when the
 	// copy finished, without polling.
 	done chan struct{}
 
@@ -60,6 +71,11 @@ type Transfer struct {
 	// the whole transfer (the copy already landed, so the data is safe;
 	// the source just survives and the error surfaces).
 	removeSource func() error
+
+	// destinationKey deduplicates active writers inside one manager;
+	// partPath isolates the actual temporary file across managers/processes.
+	destinationKey string
+	partPath       string
 }
 
 // requestCancel closes t.cancel exactly once across all callers. Safe
@@ -127,7 +143,13 @@ type Manager struct {
 
 	mu   sync.Mutex
 	list []*Transfer
-	wg   sync.WaitGroup // tracks live run + abort-watcher goroutines.
+
+	// treeClaims keeps an entire folder destination reserved until every
+	// transfer spawned by its walk has finished. Per-file deduplication alone
+	// is insufficient: a second F5 could otherwise re-enqueue files that the
+	// first folder copy had already completed while later files were pending.
+	treeClaims map[string]struct{}
+	wg         sync.WaitGroup // tracks live run + abort-watcher goroutines.
 }
 
 // dedicatedConn is the slice of *Client that StartDedicated needs: the
@@ -212,23 +234,74 @@ func (m *Manager) enqueue(c *pkgsftp.Client, dir Direction, localPath, remotePat
 		}
 		size = fi.Size()
 	}
+	destKey, destPath := transferDestination(dir, localPath, remotePath)
 	t := &Transfer{
-		Direction:    dir,
-		LocalPath:    localPath,
-		RemotePath:   remotePath,
-		Size:         size,
-		StartedAt:    time.Now(),
-		cancel:       make(chan struct{}),
-		done:         make(chan struct{}),
-		removeSource: removeSource,
+		Direction:      dir,
+		LocalPath:      localPath,
+		RemotePath:     remotePath,
+		Size:           size,
+		StartedAt:      time.Now(),
+		cancel:         make(chan struct{}),
+		done:           make(chan struct{}),
+		removeSource:   removeSource,
+		destinationKey: destKey,
+		partPath:       uniquePartPath(destPath),
 	}
 	m.mu.Lock()
+	for _, existing := range m.list {
+		if existing.Status() == StatusActive && existing.destinationKey == destKey {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("%w: %s", ErrDestinationBusy, destPath)
+		}
+	}
 	m.list = append(m.list, t)
 	m.mu.Unlock()
 
 	m.wg.Add(1) // paired with Done in run; before the goroutine starts.
 	go m.run(c, t)
 	return t, nil
+}
+
+// transferDestination returns a namespace-qualified key plus the concrete
+// destination path. Uploads and downloads write different filesystems, so
+// their keys cannot collide merely because the path strings look alike.
+func transferDestination(dir Direction, localPath, remotePath string) (string, string) {
+	if dir == Upload {
+		clean := path.Clean(remotePath)
+		return "remote\x00" + clean, clean
+	}
+	clean := filepath.Clean(localPath)
+	return "local\x00" + clean, clean
+}
+
+func uniquePartPath(destination string) string {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err == nil {
+		return destination + partSuffix + "." + hex.EncodeToString(nonce[:])
+	}
+	// crypto/rand failure must not make transfers unusable. PID plus a
+	// process-local monotonic counter retains practical uniqueness.
+	return fmt.Sprintf("%s%s.%d.%d", destination, partSuffix,
+		os.Getpid(), fallbackPartID.Add(1))
+}
+
+func (m *Manager) claimTreeDestination(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.treeClaims == nil {
+		m.treeClaims = make(map[string]struct{})
+	}
+	if _, exists := m.treeClaims[key]; exists {
+		return false
+	}
+	m.treeClaims[key] = struct{}{}
+	return true
+}
+
+func (m *Manager) releaseTreeDestination(key string) {
+	m.mu.Lock()
+	delete(m.treeClaims, key)
+	m.mu.Unlock()
 }
 
 // StartDedicated runs a single-file transfer (optionally a move, via
@@ -444,7 +517,7 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 			return err
 		}
 		defer func() { _ = lf.Close() }()
-		tmp := t.RemotePath + partSuffix
+		tmp := t.partPath
 		rf, err := c.Create(tmp)
 		if err != nil {
 			return err
@@ -466,7 +539,7 @@ func (m *Manager) copy(c *pkgsftp.Client, t *Transfer) error {
 			return err
 		}
 		defer func() { _ = rf.Close() }()
-		tmp := t.LocalPath + partSuffix
+		tmp := t.partPath
 		lf, err := os.Create(tmp)
 		if err != nil {
 			return err

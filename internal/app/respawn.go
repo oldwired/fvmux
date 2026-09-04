@@ -39,10 +39,10 @@ func (m *Mux) respawnPane() {
 			msgbox.OKOnly)
 		return
 	}
-	m.wireTerminalCallbacks(newPane, ws.Frame)
 	// Release the dead pane's PTY before dropping the reference, so its
 	// file descriptors don't linger until GC.
 	m.stopPane(pane)
 	ws.Focus.Pane = newPane
+	m.setPaneFocus(ws, ws.Focus)
 	m.rerender(ws)
 }

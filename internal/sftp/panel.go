@@ -48,6 +48,11 @@ type panel struct {
 	refRunning bool
 	refPending bool
 	refWantCwd string
+
+	// opMu/pendingOps suppress repeated remote mutations against the same
+	// path while their first network round-trip is still running.
+	opMu       sync.Mutex
+	pendingOps map[string]struct{}
 }
 
 // newPanel builds tree + listing for one side, inserts them into d,
@@ -147,9 +152,9 @@ func (p *panel) refresh() {
 // the browser's teardown drains in-flight ops before closing the shared
 // client; a no-op once the browser is closing, and done is skipped if
 // it closed while op ran.
-func (p *panel) asyncRemoteOp(op func() error, done func(error)) {
+func (p *panel) asyncRemoteOp(op func() error, done func(error)) bool {
 	if p.closed != nil && p.closed.Load() {
-		return
+		return false
 	}
 	if p.refreshWG != nil {
 		p.refreshWG.Add(1)
@@ -163,9 +168,47 @@ func (p *panel) asyncRemoteOp(op func() error, done func(error)) {
 			if p.closed != nil && p.closed.Load() {
 				return
 			}
-			done(err)
+			if done != nil {
+				done(err)
+			}
 		})
 	}()
+	return true
+}
+
+// asyncRemoteOpKey is asyncRemoteOp with an operation-level guard. It
+// returns false when the same key is already running or teardown has begun.
+// The key remains claimed through the UI completion callback, so a repeated
+// F-key cannot race the first mutation before its listing refresh lands.
+func (p *panel) asyncRemoteOpKey(key string, op func() error, done func(error)) bool {
+	if key == "" {
+		return p.asyncRemoteOp(op, done)
+	}
+	p.opMu.Lock()
+	if p.pendingOps == nil {
+		p.pendingOps = make(map[string]struct{})
+	}
+	if _, exists := p.pendingOps[key]; exists {
+		p.opMu.Unlock()
+		return false
+	}
+	p.pendingOps[key] = struct{}{}
+	p.opMu.Unlock()
+
+	started := p.asyncRemoteOp(op, func(err error) {
+		p.opMu.Lock()
+		delete(p.pendingOps, key)
+		p.opMu.Unlock()
+		if done != nil {
+			done(err)
+		}
+	})
+	if !started {
+		p.opMu.Lock()
+		delete(p.pendingOps, key)
+		p.opMu.Unlock()
+	}
+	return started
 }
 
 // requestRemoteRefresh schedules an off-thread reload of cwd's remote

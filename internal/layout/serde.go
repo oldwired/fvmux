@@ -53,9 +53,9 @@ func marshalNode(n *PaneNode, b *strings.Builder) {
 			// be resurrected across a restart regardless.
 			b.WriteString("profile=shell")
 		}
-		if n.Pane != nil && n.Pane.Title != "" {
+		if n.Pane != nil && n.Pane.UserTitle != "" {
 			b.WriteString(",title=")
-			b.WriteString(quote(n.Pane.Title))
+			b.WriteString(quote(n.Pane.UserTitle))
 		}
 	case NodeSplit:
 		if n.Orientation == views.SplitVertical {
@@ -76,8 +76,8 @@ func marshalNode(n *PaneNode, b *strings.Builder) {
 	}
 }
 
-// LeafSpec describes what a "leaf:..." node should produce: a profile
-// name plus optional title.
+// LeafSpec describes what a "leaf:..." node should produce: a profile name
+// plus an optional sticky user title.
 type LeafSpec struct {
 	Profile string
 	Title   string

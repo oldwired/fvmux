@@ -1,9 +1,11 @@
 package layout
 
 import (
+	"math"
 	"testing"
 
 	"github.com/oldwired/fv-go/pkg/fv/consts"
+	"github.com/oldwired/fv-go/pkg/fv/drivers"
 	"github.com/oldwired/fv-go/pkg/fv/geom"
 	"github.com/oldwired/fv-go/pkg/fv/views"
 	"github.com/oldwired/fv-go/pkg/fv/widgets/terminal"
@@ -84,5 +86,106 @@ func TestMaterializeSplitAnchorsOnResize(t *testing.T) {
 	}
 	if wantW, wantH := 30-2*ox, 16-2*oy; bv.Size.X != wantW || bv.Size.Y != wantH {
 		t.Errorf("after shrink, body size = %v, want (%d,%d)", bv.Size, wantW, wantH)
+	}
+}
+
+// A zoomed pane fills the screen visually, but LastRect remains the logical
+// split geometry used by FocusDir. Replacing it with the full bounds makes the
+// first directional move alter the geometry and later moves unpredictable.
+func TestMaterializeZoomPreservesLogicalRects(t *testing.T) {
+	bounds := geom.NewRect(1, 1, 81, 21)
+	a, b := newTermPane(), newTermPane()
+	leafA := Leaf(a)
+	root := SplitH(leafA, leafA, b)
+	zid := a.ID
+
+	got := Materialize(root, bounds, &zid)
+	if got != views.View(a.Term) {
+		t.Fatalf("zoomed body = %T, want pane A terminal", got)
+	}
+	leafB := root.FindByID(b.ID)
+	if a.LastRect == bounds {
+		t.Fatalf("zoom overwrote A's logical LastRect with full bounds: %v", a.LastRect)
+	}
+	if !a.LastRect.Contains(geom.Point{X: 10, Y: 10}) ||
+		!b.LastRect.Contains(geom.Point{X: 70, Y: 10}) {
+		t.Fatalf("logical split rects not retained: A=%v B=%v", a.LastRect, b.LastRect)
+	}
+	if next := FocusDir(root, leafA, Right); next != leafB {
+		t.Fatalf("Right from zoomed A = %v, want logical neighbour B", next)
+	}
+}
+
+func dragSplitGroup(t *testing.T, sg *views.SplitGroup, delta int) {
+	t.Helper()
+	q := drivers.NewQueue()
+	views.SetEventQueue(q)
+	t.Cleanup(func() { views.SetEventQueue(nil) })
+	start := sg.Splitter.Origin
+	move := start
+	if sg.Orientation == views.SplitVertical {
+		move.X += delta
+	} else {
+		move.Y += delta
+	}
+	if !q.Put(drivers.Event{What: consts.EvMouseMove, Where: move}) ||
+		!q.Put(drivers.Event{What: consts.EvMouseUp, Where: move}) {
+		t.Fatal("could not queue splitter drag events")
+	}
+	down := drivers.Event{What: consts.EvMouseDown, Where: start}
+	sg.Splitter.HandleEvent(&down)
+}
+
+// The fv-go callback must update the exact nested PaneNode so both a fresh
+// materialization and the session layout encoding retain the dragged ratio.
+func TestDraggedRatioSurvivesRerenderAndSerialization(t *testing.T) {
+	bounds := geom.NewRect(0, 0, 100, 40)
+	a, b, c := newTermPane(), newTermPane(), newTermPane()
+	inner := Split(views.SplitHorizontal, Leaf(b), Leaf(c))
+	root := Split(views.SplitVertical, Leaf(a), inner)
+	originalRootRatio := root.Ratio
+
+	body := Materialize(root, bounds, nil)
+	rootGroup, ok := body.(*views.SplitGroup)
+	if !ok {
+		t.Fatalf("root body = %T, want *views.SplitGroup", body)
+	}
+	innerGroup, ok := rootGroup.Panel2.(*views.SplitGroup)
+	if !ok {
+		t.Fatalf("nested body = %T, want *views.SplitGroup", rootGroup.Panel2)
+	}
+	dragSplitGroup(t, innerGroup, 5)
+	want := innerGroup.GetRatio()
+	if math.Abs(inner.Ratio-want) > 1e-9 {
+		t.Fatalf("nested PaneNode ratio = %v, want dragged ratio %v", inner.Ratio, want)
+	}
+	if root.Ratio != originalRootRatio {
+		t.Fatalf("nested drag changed root ratio: got %v want %v", root.Ratio, originalRootRatio)
+	}
+	if got := b.LastRect.Height(); got != innerGroup.SplitPos {
+		t.Fatalf("dragged pane hit rect height = %d, want live split position %d", got, innerGroup.SplitPos)
+	}
+
+	rerendered, ok := Materialize(root, bounds, nil).(*views.SplitGroup)
+	if !ok {
+		t.Fatal("rerendered root is not a SplitGroup")
+	}
+	rerenderedInner, ok := rerendered.Panel2.(*views.SplitGroup)
+	if !ok {
+		t.Fatal("rerendered nested node is not a SplitGroup")
+	}
+	if got := rerenderedInner.GetRatio(); math.Abs(got-want) > 1e-9 {
+		t.Fatalf("rerendered nested ratio = %v, want %v", got, want)
+	}
+
+	encoded := Marshal(root)
+	restored, err := Unmarshal(encoded, func(spec LeafSpec) (*session.Pane, error) {
+		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile}, nil
+	})
+	if err != nil {
+		t.Fatalf("Unmarshal(Marshal(root)): %v", err)
+	}
+	if got := restored.B.Ratio; got != inner.Ratio {
+		t.Fatalf("serialized nested ratio = %v, want exact %v (layout %q)", got, inner.Ratio, encoded)
 	}
 }

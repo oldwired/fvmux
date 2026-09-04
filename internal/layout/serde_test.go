@@ -9,7 +9,7 @@ import (
 )
 
 func TestMarshalLeaf(t *testing.T) {
-	p := &session.Pane{ID: session.NewPaneID(), Profile: "shell", Title: "zsh"}
+	p := &session.Pane{ID: session.NewPaneID(), Profile: "shell", UserTitle: "zsh"}
 	got := Marshal(Leaf(p))
 	want := `leaf:profile=shell,title="zsh"`
 	if got != want {
@@ -42,7 +42,7 @@ func TestUnmarshalRoundtrip(t *testing.T) {
 		`split-h:0.3{leaf:profile=shell,title="a"}{split-v:0.5{leaf:profile=shell}{leaf:profile=shell}}`,
 	}
 	spawn := func(spec LeafSpec) (*session.Pane, error) {
-		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
+		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, UserTitle: spec.Title}, nil
 	}
 	for _, src := range cases {
 		root, err := Unmarshal(src, spawn)
@@ -66,7 +66,7 @@ func TestRatioRoundTripIsExact(t *testing.T) {
 	root.Ratio = 2.0 / 3.0
 
 	spawn := func(spec LeafSpec) (*session.Pane, error) {
-		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, Title: spec.Title}, nil
+		return &session.Pane{ID: session.NewPaneID(), Profile: spec.Profile, UserTitle: spec.Title}, nil
 	}
 	back, err := Unmarshal(Marshal(root), spawn)
 	if err != nil {

@@ -92,7 +92,7 @@ func (h *keyHandler) renameInPlace(p *panel, e *fileEntry, newName string) {
 		return
 	}
 	dest := joinRemote(p.cwd, newName)
-	h.async(
+	if !p.asyncRemoteOpKey("rename:"+e.Path,
 		func() error { return p.c.Rename(e.Path, dest) },
 		func(err error) {
 			if err != nil {
@@ -101,7 +101,9 @@ func (h *keyHandler) renameInPlace(p *panel, e *fileEntry, newName string) {
 				return
 			}
 			p.refresh()
-		})
+		}) {
+		showOperationInProgress(h.app, e.Path)
+	}
 }
 
 // moveToOther moves e onto the other panel's host at dest (a cross-host
@@ -201,8 +203,7 @@ func (h *keyHandler) remoteExists(c *pkgsftp.Client, p string) bool {
 }
 
 func (h *keyHandler) moveErr(err error) {
-	msgbox.Showf(&h.app.Desktop.Group, msgbox.Error,
-		"Move failed: %s", []any{err.Error()}, msgbox.OKOnly)
+	h.reportTransferError("Move", err)
 }
 
 // moveDone is the async completion for the move legs: surfaces the

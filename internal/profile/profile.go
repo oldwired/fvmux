@@ -26,7 +26,7 @@ type Profile struct {
 	Args    []string          `toml:"args"`
 	Env     map[string]string `toml:"env"`
 	CWD     string            `toml:"cwd"`   // "~" / "$VARS" expanded at Instantiate time
-	Title   string            `toml:"title"` // initial pane title; OSC overrides
+	Title   string            `toml:"title"` // fallback pane title when no user/OSC title exists
 
 	// Layout, when non-empty, pre-splits the profile's window using the
 	// same DSL session snapshots use (see internal/layout/serde.go);
@@ -134,13 +134,17 @@ func Find(profiles []*Profile, name string) *Profile {
 	return nil
 }
 
-// Instantiate constructs a live session.Pane from p, starting the
-// terminal at the given bounds. defaultScrollback is the global fallback
-// (from [terminal] scrollback_lines) used when p.ScrollbackLines == 0.
-// defaultShell is the configured [terminal] shell — used when the
-// profile leaves Command empty (chain: profile → config → $SHELL →
-// /bin/sh).
-func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShell string) (*session.Pane, error) {
+// Instantiate constructs a session.Pane from p and starts its terminal at
+// the given bounds. Each configure hook runs after the pane is fully built
+// but before Terminal.Start launches reader/wait goroutines. Hosts must use
+// this hook for terminal callbacks: assigning callback fields after Start
+// races the terminal goroutines and can miss an immediately-exiting child.
+//
+// defaultScrollback is the global fallback (from [terminal]
+// scrollback_lines) used when p.ScrollbackLines == 0. defaultShell is the
+// configured [terminal] shell — used when the profile leaves Command empty
+// (chain: profile → config → $SHELL → platform fallback).
+func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShell string, configure ...func(*session.Pane)) (*session.Pane, error) {
 	if p == nil {
 		return nil, errors.New("profile.Instantiate: nil profile")
 	}
@@ -167,21 +171,27 @@ func Instantiate(p *Profile, bounds geom.Rect, defaultScrollback int, defaultShe
 	if cmd == "" {
 		cmd = FallbackShell()
 	}
-	if err := t.Start(cmd, p.Args, nil); err != nil {
-		return nil, err
-	}
 	title := p.Title
 	if title == "" {
 		title = p.Name
 	}
-	return &session.Pane{
+	pane := &session.Pane{
 		ID:          session.NewPaneID(),
 		Term:        t,
 		Title:       title,
 		Profile:     p.Name,
 		SSHAlias:    p.SSHAlias,
 		CloseOnExit: p.CloseOnExit,
-	}, nil
+	}
+	for _, fn := range configure {
+		if fn != nil {
+			fn(pane)
+		}
+	}
+	if err := t.Start(cmd, p.Args, nil); err != nil {
+		return nil, err
+	}
+	return pane, nil
 }
 
 // spawnEnv builds the child environment for a profile that defines env

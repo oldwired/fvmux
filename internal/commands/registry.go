@@ -38,13 +38,17 @@ func (r *Registry) Register(c *Command) {
 	}
 }
 
-// LookupByName returns the (first) command whose Name exactly matches.
-// Used by keybindings.toml override application — the command field in
-// the TOML is the user-facing Name.
+// LookupByName returns the first command whose current Name or legacy alias
+// exactly matches. It resolves keybindings.toml's user-facing command field.
 func (r *Registry) LookupByName(name string) *Command {
 	for _, c := range r.cmds {
 		if c.Name == name {
 			return c
+		}
+		for _, alias := range c.Aliases {
+			if alias == name {
+				return c
+			}
 		}
 	}
 	return nil

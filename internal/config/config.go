@@ -18,11 +18,12 @@ type Config struct {
 // General captures the prefix-key, default-profile and similar top-level
 // preferences.
 type General struct {
-	PrefixKey      string `toml:"prefix_key"`      // "C-g", "C-b", …
-	DefaultProfile string `toml:"default_profile"` // "shell"
-	ConfirmKill    bool   `toml:"confirm_kill"`
-	SplashEnabled  bool   `toml:"splash_enabled"`
-	ConnectSplit   string `toml:"connect_split"` // "vertical" or "horizontal"
+	PrefixKey       string `toml:"prefix_key"`      // "C-g", "C-b", …
+	DefaultProfile  string `toml:"default_profile"` // "shell"
+	ConfirmKill     bool   `toml:"confirm_kill"`
+	SplashEnabled   bool   `toml:"splash_enabled"`
+	ConnectSplit    string `toml:"connect_split"` // legacy: "vertical" stacks, "horizontal" places beside.
+	InheritSplitCWD bool   `toml:"inherit_cwd_on_split"`
 
 	// NewWindowCommand, when non-empty, overrides what Ctrl-G c runs.
 	// Interpreted as a shell command (passed through `sh -c`) so pipes,
@@ -66,11 +67,12 @@ type SFTP struct {
 func Defaults() *Config {
 	return &Config{
 		General: General{
-			PrefixKey:      "C-g",
-			DefaultProfile: "shell",
-			ConfirmKill:    true,
-			SplashEnabled:  true,
-			ConnectSplit:   "vertical",
+			PrefixKey:       "C-g",
+			DefaultProfile:  "shell",
+			ConfirmKill:     true,
+			SplashEnabled:   true,
+			ConnectSplit:    "vertical",
+			InheritSplitCWD: true,
 		},
 		Terminal: Terminal{
 			ScrollbackLines: 10000,

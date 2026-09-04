@@ -102,10 +102,17 @@ confirm_kill    = true
 # Help → Reset First-Run Wizard.
 splash_enabled  = true
 
+# inherit_cwd_on_split: start a newly split local shell in the focused
+# local pane's OSC-7 working directory. SSH panes never donate their
+# remote path to a local process. Disable to always use the profile cwd.
+inherit_cwd_on_split = true
+
 # connect_split: where <prefix> H (Connect to Host) puts the session.
-# Follows fvmux's split naming (same as tmux): "vertical" stacks the
-# new pane below the focused one (like Split Vertical, <prefix> "),
-# "horizontal" places it beside (like Split Horizontal, <prefix> %),
+# The legacy values stay compatible: "vertical" produces a top/bottom
+# arrangement (new pane below, like Split Top/Bottom, <prefix> "), while
+# "horizontal" produces a left/right arrangement (like Split Left/Right,
+# <prefix> %). New configs should read these as arrangements, not divider
+# orientation.
 # "window" opens a floating window ("window" is also the fallback when
 # no pane is focused).
 connect_split   = "vertical"
@@ -230,5 +237,5 @@ const templateKeybindings = `# fvmux key bindings overrides.
 #
 # [[binding]]
 # chord   = "C-g X"               # custom chord for a built-in
-# command = "Split Horizontal"
+# command = "Split Left/Right"
 `

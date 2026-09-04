@@ -4,6 +4,7 @@
 package prefix
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -50,6 +51,12 @@ type View struct {
 	// within tripleWindow. Cleared by the caller (typically a one-shot
 	// installer). Re-entry safe.
 	OnTriplePress func()
+
+	// OnUnknown reports an attempted chord that has no registry binding.
+	// OnUnavailable reports a bound command whose live predicate vetoed it.
+	// Both events are always consumed before either callback runs.
+	OnUnknown     func(chord string)
+	OnUnavailable func(command *commands.Command)
 }
 
 // New returns a freshly-constructed prefix view armed on spec.KeyCode.
@@ -138,11 +145,18 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 
 	chord := v.chordOf(ev)
 	if chord == "" {
-		// Unbound key — let it through to the focused view.
+		if v.OnUnknown != nil {
+			v.OnUnknown(v.describeChord(ev))
+		}
+		ev.Clear()
 		return
 	}
 	c := v.reg.LookupChord(chord)
 	if c == nil {
+		if v.OnUnknown != nil {
+			v.OnUnknown(chord)
+		}
+		ev.Clear()
 		return
 	}
 	if c.Enabled != nil && !c.Enabled(v.ctx) {
@@ -151,12 +165,50 @@ func (v *View) HandleEvent(ev *drivers.Event) {
 		// the focused pane (e.g. C-g D outside tmux typed a literal 'D'
 		// at the shell prompt).
 		ev.Clear()
+		if v.OnUnavailable != nil {
+			v.OnUnavailable(c)
+		}
 		return
 	}
 	if c.Action != nil {
 		c.Action(v.ctx)
 	}
 	ev.Clear()
+}
+
+// describeChord gives unknown non-dispatchable special keys a stable,
+// readable status label. Dispatchable keys already use chordOf's canonical
+// registry spelling; the numeric fallback keeps even future key codes honest.
+func (v *View) describeChord(ev *drivers.Event) string {
+	if chord := v.chordOf(ev); chord != "" {
+		return chord
+	}
+	atom := ""
+	switch ev.KeyCode {
+	case consts.KbLeft:
+		atom = "Left"
+	case consts.KbRight:
+		atom = "Right"
+	case consts.KbUp:
+		atom = "Up"
+	case consts.KbDown:
+		atom = "Down"
+	case consts.KbHome:
+		atom = "Home"
+	case consts.KbEnd:
+		atom = "End"
+	case consts.KbPgUp:
+		atom = "PageUp"
+	case consts.KbPgDn:
+		atom = "PageDown"
+	case consts.KbDel:
+		atom = "Delete"
+	case consts.KbIns:
+		atom = "Insert"
+	default:
+		atom = fmt.Sprintf("key-%04x", ev.KeyCode)
+	}
+	return v.spec.ChordToken + " " + atom
 }
 
 // recordPress shifts the press-timestamp ring and fires OnTriplePress

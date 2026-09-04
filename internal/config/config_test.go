@@ -17,6 +17,9 @@ func TestDefaultsRoundTrip(t *testing.T) {
 	if c.Appearance.Theme != "slate" {
 		t.Errorf("default theme = %q", c.Appearance.Theme)
 	}
+	if !c.General.InheritSplitCWD {
+		t.Error("inherit_cwd_on_split should default true")
+	}
 }
 
 func TestLoadMissingReturnsDefaults(t *testing.T) {
@@ -35,6 +38,7 @@ func TestLoadOverridesDefaults(t *testing.T) {
 	body := `
 [general]
 prefix_key = "C-b"
+inherit_cwd_on_split = false
 
 [appearance]
 theme = "tokyonight-ish"
@@ -51,6 +55,9 @@ theme = "tokyonight-ish"
 	}
 	if c.Appearance.Theme != "tokyonight-ish" {
 		t.Errorf("got theme %q", c.Appearance.Theme)
+	}
+	if c.General.InheritSplitCWD {
+		t.Error("explicit inherit_cwd_on_split=false was not loaded")
 	}
 	// Untouched key should still hold the default.
 	if c.Terminal.ScrollbackLines != 10000 {

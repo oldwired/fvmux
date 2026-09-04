@@ -36,10 +36,11 @@ func ParsePosition(s string) Position {
 // fuzzy-find behaviour. The original Show takes the same arguments
 // it always did; ShowWithOptions exposes MRU + persist callback.
 type Options struct {
-	Pos     Position
-	MRU     []uint16              // recently-used command IDs, newest first.
-	Persist func(newMRU []uint16) // called after a successful pick.
-	Special []SpecialEntry        // optional synthetic entries (`:`, `@`, `#`, `?`).
+	Pos        Position
+	MRU        []uint16                // recently-used command IDs, newest first.
+	Persist    func(newMRU []uint16)   // called after a successful pick.
+	Special    []SpecialEntry          // optional synthetic entries (`:`, `@`, `#`, `?`).
+	OnDisabled func(*commands.Command) // optional explanation surface.
 }
 
 // SpecialEntry is a top-of-list pseudo-command. Selecting one runs
@@ -98,6 +99,9 @@ func ShowWithOptions(a *fvapp.Application, reg *commands.Registry, ctx *commands
 	}
 	cmd := cmds[idx-len(opts.Special)]
 	if cmd.Enabled != nil && !cmd.Enabled(ctx) {
+		if opts.OnDisabled != nil {
+			opts.OnDisabled(cmd)
+		}
 		return
 	}
 	if cmd.Action != nil {

@@ -36,7 +36,7 @@ func (m *Mux) snapshotStatus() statusbar.Snapshot {
 	if curWS != nil {
 		out.SyncInput = curWS.SyncInput
 		if curWS.Focus != nil && curWS.Focus.Pane != nil {
-			out.FocusedTitle = curWS.Focus.Pane.Title
+			out.FocusedTitle = curWS.Focus.Pane.DisplayTitle()
 			out.FocusedCWD = curWS.Focus.Pane.CWD
 		}
 	}
@@ -90,6 +90,7 @@ func flipHistory(h []float64) []float64 {
 
 // refreshStatusBar pushes a fresh snapshot to the bar.
 func (m *Mux) refreshStatusBar() {
+	m.refreshMenuAvailability()
 	if m.Opts.StatusBar == nil {
 		return
 	}

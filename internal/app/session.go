@@ -134,8 +134,8 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 	// -session exit entirely). Failures are collected and reported once
 	// the event loop is running.
 	var failed []string
-	var activeKey views.View
-	restored := 0
+	var restoredKeys []views.View
+	var restoredOriginalIndices []int
 	// One hosts parse shared by every pane's profile fallback below.
 	hostLookup := m.hostLookupOnce()
 	for i, ws := range snap.Windows {
@@ -147,19 +147,17 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 			failed = append(failed, fmt.Sprintf("%s: %v", ws.Title, err))
 			continue
 		}
-		restored++
-		if i == snap.Active && len(m.windowOrder) > 0 {
-			activeKey = m.windowOrder[len(m.windowOrder)-1]
+		if len(m.windowOrder) > 0 {
+			restoredKeys = append(restoredKeys, m.windowOrder[len(m.windowOrder)-1])
+			restoredOriginalIndices = append(restoredOriginalIndices, i)
 		}
 	}
-	if len(snap.Windows) > 0 && restored == 0 {
+	if len(snap.Windows) > 0 && len(restoredKeys) == 0 {
 		return fmt.Errorf("no window could be restored:\n%s",
 			strings.Join(failed, "\n"))
 	}
-	if activeKey != nil {
-		m.App.Desktop.Focus(activeKey)
-	} else if snap.Active >= 0 && snap.Active < len(m.windowOrder) {
-		m.App.Desktop.Focus(m.windowOrder[snap.Active])
+	if i := nearestRestoredIndex(snap.Active, len(snap.Windows), restoredOriginalIndices); i >= 0 {
+		m.App.Desktop.Focus(restoredKeys[i])
 	}
 	if len(failed) > 0 {
 		// Deferred via CallSoon: at startup LoadSession runs before
@@ -181,6 +179,26 @@ func (m *Mux) LoadSession(snap *session.Snapshot) error {
 		m.scheduleSftpRestore(alias)
 	}
 	return nil
+}
+
+// nearestRestoredIndex maps a snapshot's active-window index to the closest
+// window that actually restored. Distances are measured in the original
+// snapshot, not the compressed success list; ties prefer the earlier window.
+func nearestRestoredIndex(active, originalCount int, restoredOriginalIndices []int) int {
+	if active < 0 || active >= originalCount || len(restoredOriginalIndices) == 0 {
+		return -1
+	}
+	best, bestDistance := -1, originalCount+1
+	for i, original := range restoredOriginalIndices {
+		distance := original - active
+		if distance < 0 {
+			distance = -distance
+		}
+		if best == -1 || distance < bestDistance || (distance == bestDistance && original < restoredOriginalIndices[best]) {
+			best, bestDistance = i, distance
+		}
+	}
+	return best
 }
 
 // resolveProfileFallback fires when a saved pane's Profile name isn't
@@ -227,9 +245,8 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect, h
 		}
 		spawned = append(spawned, pane)
 		if spec.Title != "" {
-			pane.Title = spec.Title
+			pane.UserTitle = spec.Title
 		}
-		m.wireTerminalCallbacks(pane, w)
 		return pane, nil
 	}
 
@@ -256,27 +273,25 @@ func (m *Mux) openSnapshotWindow(ws *session.WindowSnapshot, bounds geom.Rect, h
 		Root:      root,
 		SyncInput: ws.SyncInput,
 	}
+	var focus *layout.PaneNode
 	switch {
 	case ws.FocusIndex >= 0 && ws.FocusIndex < len(leaves):
-		state.Focus = leaves[ws.FocusIndex]
+		focus = leaves[ws.FocusIndex]
 	case len(leaves) > 0:
-		state.Focus = leaves[0]
+		focus = leaves[0]
 	}
 	// Zoomed is 1-based (0 = none); restore it if the index is still valid.
 	if ws.Zoomed > 0 && ws.Zoomed <= len(leaves) && leaves[ws.Zoomed-1].Pane != nil {
 		id := leaves[ws.Zoomed-1].Pane.ID
 		state.Zoomed = &id
+		// Zoom is a focus state: the visible leaf is also the command target.
+		focus = leaves[ws.Zoomed-1]
 	}
 
 	body := layout.Materialize(root, interior, state.Zoomed)
 	w.Insert(body)
 
 	m.registerWindow(w, state)
-	if state.Focus != nil && state.Focus.Pane != nil {
-		focusTerminalPath(w, state.Focus.Pane.Term)
-	}
-	// Apply user-set caption immediately so restored sessions display
-	// their custom names even before the shell emits an OSC title.
-	m.refreshWindowTitle(state)
+	m.setPaneFocus(state, focus)
 	return nil
 }
